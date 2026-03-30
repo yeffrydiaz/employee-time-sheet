@@ -1,6 +1,6 @@
-# Royal Transportation - Employee Time Sheet Manager
+# Employee Time Sheet Manager
 
-A web-based application designed to help employees of Royal Transportation easily track, manage, and submit their weekly work hours. 
+A web-based application designed to help employees easily track, manage, and submit their weekly work hours. 
 
 ## Features
 
