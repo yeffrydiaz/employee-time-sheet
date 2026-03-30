@@ -1,0 +1,5 @@
+{
+  "name": "Employee Time Sheet",
+  "description": "A digital employee time sheet application that allows users to fill out their weekly hours and send them via email.",
+  "requestFramePermissions": []
+}
