@@ -143,6 +143,27 @@ export default function App() {
     setName(capitalized);
   };
 
+  const handleWeekOfChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const newWeekOf = e.target.value;
+    setWeekOf(newWeekOf);
+    
+    if (newWeekOf) {
+      const [year, month, day] = newWeekOf.split('-').map(Number);
+      const selectedDate = new Date(year, month - 1, day);
+      const dayOfWeek = selectedDate.getDay();
+      const sundayDate = new Date(year, month - 1, day - dayOfWeek);
+      
+      const newRecords = records.map((record, index) => {
+        const recordDate = new Date(sundayDate.getFullYear(), sundayDate.getMonth(), sundayDate.getDate() + index);
+        const yyyy = recordDate.getFullYear();
+        const mm = String(recordDate.getMonth() + 1).padStart(2, '0');
+        const dd = String(recordDate.getDate()).padStart(2, '0');
+        return { ...record, date: `${yyyy}-${mm}-${dd}` };
+      });
+      setRecords(newRecords);
+    }
+  };
+
   const getErrors = (record: DailyRecord) => {
     const errs: Partial<Record<keyof DailyRecord, string>> = {};
     const timeRegex = /^([01]?[0-9]|2[0-3]):[0-5][0-9]$/;
@@ -333,7 +354,7 @@ export default function App() {
                 placeholder="Manager's Email"
                 value={recipientEmail}
                 onChange={(e) => setRecipientEmail(e.target.value)}
-                className="px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 w-full sm:w-56"
+                className="px-3 py-2 text-base border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 w-full sm:w-56"
               />
               <button
                 onClick={handleSendEmail}
@@ -382,7 +403,7 @@ export default function App() {
                 <input
                   type="date"
                   value={weekOf}
-                  onChange={(e) => setWeekOf(e.target.value)}
+                  onChange={handleWeekOfChange}
                   className="block w-full border-0 border-b-2 border-gray-200 focus:border-indigo-600 focus:ring-0 px-0 py-2 text-base sm:text-lg transition-colors bg-transparent"
                 />
               </div>
@@ -402,7 +423,7 @@ export default function App() {
                         type="date"
                         value={record.date}
                         onChange={(e) => handleRecordChange(index, 'date', e.target.value)}
-                        className="w-full border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 text-sm py-2 px-3 bg-white"
+                        className="w-full border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 text-base py-2 px-3 bg-white"
                       />
                     </div>
                     <div>
@@ -411,7 +432,7 @@ export default function App() {
                         type="time"
                         value={record.timeIn}
                         onChange={(e) => handleRecordChange(index, 'timeIn', e.target.value)}
-                        className={`w-full rounded-md shadow-sm text-sm py-2 px-3 bg-white ${errors.timeIn ? 'border-red-500 focus:ring-red-500 focus:border-red-500' : 'border-gray-300 focus:ring-indigo-500 focus:border-indigo-500'}`}
+                        className={`w-full rounded-md shadow-sm text-base py-2 px-3 bg-white ${errors.timeIn ? 'border-red-500 focus:ring-red-500 focus:border-red-500' : 'border-gray-300 focus:ring-indigo-500 focus:border-indigo-500'}`}
                       />
                       {errors.timeIn && <p className="text-[10px] text-red-500 mt-1">{errors.timeIn}</p>}
                     </div>
@@ -421,7 +442,7 @@ export default function App() {
                         type="time"
                         value={record.timeOut}
                         onChange={(e) => handleRecordChange(index, 'timeOut', e.target.value)}
-                        className={`w-full rounded-md shadow-sm text-sm py-2 px-3 bg-white ${errors.timeOut ? 'border-red-500 focus:ring-red-500 focus:border-red-500' : 'border-gray-300 focus:ring-indigo-500 focus:border-indigo-500'}`}
+                        className={`w-full rounded-md shadow-sm text-base py-2 px-3 bg-white ${errors.timeOut ? 'border-red-500 focus:ring-red-500 focus:border-red-500' : 'border-gray-300 focus:ring-indigo-500 focus:border-indigo-500'}`}
                       />
                       {errors.timeOut && <p className="text-[10px] text-red-500 mt-1">{errors.timeOut}</p>}
                     </div>
@@ -431,7 +452,7 @@ export default function App() {
                         type="time"
                         value={record.lunchStart}
                         onChange={(e) => handleRecordChange(index, 'lunchStart', e.target.value)}
-                        className={`w-full rounded-md shadow-sm text-sm py-2 px-3 bg-white ${errors.lunchStart ? 'border-red-500 focus:ring-red-500 focus:border-red-500' : 'border-gray-300 focus:ring-indigo-500 focus:border-indigo-500'}`}
+                        className={`w-full rounded-md shadow-sm text-base py-2 px-3 bg-white ${errors.lunchStart ? 'border-red-500 focus:ring-red-500 focus:border-red-500' : 'border-gray-300 focus:ring-indigo-500 focus:border-indigo-500'}`}
                       />
                       {errors.lunchStart && <p className="text-[10px] text-red-500 mt-1">{errors.lunchStart}</p>}
                     </div>
@@ -441,7 +462,7 @@ export default function App() {
                         type="time"
                         value={record.lunchEnd}
                         onChange={(e) => handleRecordChange(index, 'lunchEnd', e.target.value)}
-                        className={`w-full rounded-md shadow-sm text-sm py-2 px-3 bg-white ${errors.lunchEnd ? 'border-red-500 focus:ring-red-500 focus:border-red-500' : 'border-gray-300 focus:ring-indigo-500 focus:border-indigo-500'}`}
+                        className={`w-full rounded-md shadow-sm text-base py-2 px-3 bg-white ${errors.lunchEnd ? 'border-red-500 focus:ring-red-500 focus:border-red-500' : 'border-gray-300 focus:ring-indigo-500 focus:border-indigo-500'}`}
                       />
                       {errors.lunchEnd && <p className="text-[10px] text-red-500 mt-1">{errors.lunchEnd}</p>}
                     </div>
@@ -452,7 +473,7 @@ export default function App() {
                           type="text"
                           value={record.totalHours}
                           onChange={(e) => handleRecordChange(index, 'totalHours', e.target.value)}
-                          className={`w-[fit-content] rounded-md shadow-sm text-sm py-2 px-3 font-mono bg-gray-100 ${errors.totalHours ? 'border-red-500 focus:ring-red-500 focus:border-red-500' : 'border-gray-300 focus:ring-indigo-500 focus:border-indigo-500'}`}
+                          className={`w-[fit-content] rounded-md shadow-sm text-base py-2 px-3 font-mono bg-gray-100 ${errors.totalHours ? 'border-red-500 focus:ring-red-500 focus:border-red-500' : 'border-gray-300 focus:ring-indigo-500 focus:border-indigo-500'}`}
                           placeholder="0.00"
                           size={5}
                         />
@@ -464,7 +485,7 @@ export default function App() {
                           type="text"
                           value={record.notes}
                           onChange={(e) => handleRecordChange(index, 'notes', e.target.value)}
-                          className="w-full border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 text-sm py-2 px-3 bg-white"
+                          className="w-full border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 text-base py-2 px-3 bg-white"
                           placeholder="..."
                         />
                       </div>
@@ -479,14 +500,13 @@ export default function App() {
               <table className="min-w-full divide-y divide-gray-200">
                 <thead className="bg-gray-50">
                   <tr>
-                    <th scope="col" className="px-2 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider w-24">Day</th>
-                    <th scope="col" className="px-2 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider w-32">Date</th>
-                    <th scope="col" className="px-2 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider w-24">Time In</th>
-                    <th scope="col" className="px-2 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider w-24">Lunch Start</th>
-                    <th scope="col" className="px-2 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider w-24">Lunch End</th>
-                    <th scope="col" className="px-2 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider w-24">Time Out</th>
-                    <th scope="col" className="px-2 py-3 text-center text-xs font-semibold text-gray-600 uppercase tracking-wider w-24">Total Hrs</th>
-                    <th scope="col" className="px-2 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Notes</th>
+                    <th scope="col" className="px-2 py-3 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider w-40">Date</th>
+                    <th scope="col" className="px-2 py-3 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider w-24">Time In</th>
+                    <th scope="col" className="px-2 py-3 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider w-24">Lunch Start</th>
+                    <th scope="col" className="px-2 py-3 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider w-24">Lunch End</th>
+                    <th scope="col" className="px-2 py-3 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider w-24">Time Out</th>
+                    <th scope="col" className="px-2 py-3 text-center text-sm font-semibold text-gray-600 uppercase tracking-wider w-24">Total Hrs</th>
+                    <th scope="col" className="px-2 py-3 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">Notes</th>
                   </tr>
                 </thead>
                 <tbody className="bg-white divide-y divide-gray-200">
@@ -494,70 +514,74 @@ export default function App() {
                     const errors = getErrors(record);
                     return (
                     <tr key={record.day} className="hover:bg-gray-50/50 transition-colors">
-                      <td className="px-2 py-3 text-sm font-medium text-gray-900 bg-gray-50/30 align-top">
-                        {record.day}
-                      </td>
-                      <td className="px-2 py-2 align-top">
+                      <td className="px-2 py-2 align-top bg-gray-50/30">
+                        <div className="text-sm font-medium text-gray-900 mb-1 ml-1">{record.day}</div>
                         <input
                           type="date"
                           value={record.date}
                           onChange={(e) => handleRecordChange(index, 'date', e.target.value)}
-                          className="w-full border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm py-1.5 px-2"
+                          className="w-full border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 text-base py-2 px-2"
                         />
                       </td>
                       <td className="px-2 py-2 align-top">
+                        <div className="h-6"></div>
                         <input
                           type="time"
                           value={record.timeIn}
                           onChange={(e) => handleRecordChange(index, 'timeIn', e.target.value)}
-                          className={`w-full rounded-md shadow-sm text-xs sm:text-sm py-1.5 px-1 ${errors.timeIn ? 'border-red-500 focus:ring-red-500 focus:border-red-500' : 'border-gray-300 focus:ring-indigo-500 focus:border-indigo-500'}`}
+                          className={`w-full rounded-md shadow-sm text-base py-2 px-1 ${errors.timeIn ? 'border-red-500 focus:ring-red-500 focus:border-red-500' : 'border-gray-300 focus:ring-indigo-500 focus:border-indigo-500'}`}
                         />
                         {errors.timeIn && <div className="text-[10px] text-red-500 mt-1">{errors.timeIn}</div>}
                       </td>
                       <td className="px-2 py-2 align-top">
+                        <div className="h-6"></div>
                         <input
                           type="time"
                           value={record.lunchStart}
                           onChange={(e) => handleRecordChange(index, 'lunchStart', e.target.value)}
-                          className={`w-full rounded-md shadow-sm text-xs sm:text-sm py-1.5 px-1 ${errors.lunchStart ? 'border-red-500 focus:ring-red-500 focus:border-red-500' : 'border-gray-300 focus:ring-indigo-500 focus:border-indigo-500'}`}
+                          className={`w-full rounded-md shadow-sm text-base py-2 px-1 ${errors.lunchStart ? 'border-red-500 focus:ring-red-500 focus:border-red-500' : 'border-gray-300 focus:ring-indigo-500 focus:border-indigo-500'}`}
                         />
                         {errors.lunchStart && <div className="text-[10px] text-red-500 mt-1">{errors.lunchStart}</div>}
                       </td>
                       <td className="px-2 py-2 align-top">
+                        <div className="h-6"></div>
                         <input
                           type="time"
                           value={record.lunchEnd}
                           onChange={(e) => handleRecordChange(index, 'lunchEnd', e.target.value)}
-                          className={`w-full rounded-md shadow-sm text-xs sm:text-sm py-1.5 px-1 ${errors.lunchEnd ? 'border-red-500 focus:ring-red-500 focus:border-red-500' : 'border-gray-300 focus:ring-indigo-500 focus:border-indigo-500'}`}
+                          className={`w-full rounded-md shadow-sm text-base py-2 px-1 ${errors.lunchEnd ? 'border-red-500 focus:ring-red-500 focus:border-red-500' : 'border-gray-300 focus:ring-indigo-500 focus:border-indigo-500'}`}
                         />
                         {errors.lunchEnd && <div className="text-[10px] text-red-500 mt-1">{errors.lunchEnd}</div>}
                       </td>
                       <td className="px-2 py-2 align-top">
+                        <div className="h-6"></div>
                         <input
                           type="time"
                           value={record.timeOut}
                           onChange={(e) => handleRecordChange(index, 'timeOut', e.target.value)}
-                          className={`w-full rounded-md shadow-sm text-xs sm:text-sm py-1.5 px-1 ${errors.timeOut ? 'border-red-500 focus:ring-red-500 focus:border-red-500' : 'border-gray-300 focus:ring-indigo-500 focus:border-indigo-500'}`}
+                          className={`w-full rounded-md shadow-sm text-base py-2 px-1 ${errors.timeOut ? 'border-red-500 focus:ring-red-500 focus:border-red-500' : 'border-gray-300 focus:ring-indigo-500 focus:border-indigo-500'}`}
                         />
                         {errors.timeOut && <div className="text-[10px] text-red-500 mt-1">{errors.timeOut}</div>}
                       </td>
                       <td className="px-2 py-2 text-center align-top">
+                        <div className="h-6"></div>
                         <input
                           type="text"
                           value={record.totalHours}
                           onChange={(e) => handleRecordChange(index, 'totalHours', e.target.value)}
-                          className={`w-[fit-content] rounded-md shadow-sm text-base font-bold py-2 px-2 font-mono bg-indigo-50 text-indigo-700 text-center mx-auto ${errors.totalHours ? 'border-red-500 focus:ring-red-500 focus:border-red-500' : 'border-gray-300 focus:ring-indigo-500 focus:border-indigo-500'}`}
+                          className={`w-[fit-content] rounded-md shadow-sm text-lg font-bold py-2 px-2 font-mono bg-indigo-50 text-indigo-700 text-center mx-auto ${errors.totalHours ? 'border-red-500 focus:ring-red-500 focus:border-red-500' : 'border-gray-300 focus:ring-indigo-500 focus:border-indigo-500'}`}
                           placeholder="0.00"
-                          size={4}
+                          size={5}
                         />
                         {errors.totalHours && <div className="text-[10px] text-red-500 mt-1">{errors.totalHours}</div>}
                       </td>
                       <td className="px-2 py-2 align-top">
+                        <div className="h-6"></div>
                         <input
                           type="text"
                           value={record.notes}
                           onChange={(e) => handleRecordChange(index, 'notes', e.target.value)}
-                          className="w-full border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm py-1.5 px-2"
+                          className="w-full border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 text-base py-2 px-2"
                           placeholder="..."
                         />
                       </td>
