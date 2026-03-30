@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Mail, Printer, Calculator, RefreshCw, Save, Loader2 } from 'lucide-react';
+import { Mail, Printer, Calculator, RefreshCw, Save, Loader2, History, Search, X, ChevronRight, Trash2 } from 'lucide-react';
 import SignatureCanvas from 'react-signature-canvas';
 
 interface DailyRecord {
@@ -24,6 +24,7 @@ const initialRecords: DailyRecord[] = [
 ];
 
 const STORAGE_KEY = 'employee_timesheet_data';
+const HISTORY_STORAGE_KEY = 'employee_timesheet_history';
 const DEFAULT_EMAIL = 'TIMESHEETS@ROYAL-TRANS.COM';
 
 const loadSavedData = () => {
@@ -50,6 +51,12 @@ export default function App() {
   const [recipientEmail, setRecipientEmail] = useState(savedData?.recipientEmail || DEFAULT_EMAIL);
   const [lastSaved, setLastSaved] = useState<Date | null>(null);
   const [isSending, setIsSending] = useState(false);
+  
+  // History and Modal states
+  const [isHistoryOpen, setIsHistoryOpen] = useState(false);
+  const [historySearchTerm, setHistorySearchTerm] = useState('');
+  const [historyData, setHistoryData] = useState<Record<string, any>>({});
+  const [showClearConfirm, setShowClearConfirm] = useState(false);
 
   const sigCanvas = useRef<SignatureCanvas>(null);
 
@@ -65,6 +72,18 @@ export default function App() {
     const dataToSave = { name, weekOf, records, signature, date, recipientEmail };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(dataToSave));
     setLastSaved(new Date());
+
+    // Also save to history if weekOf is set
+    if (weekOf) {
+      try {
+        const historyStr = localStorage.getItem(HISTORY_STORAGE_KEY) || '{}';
+        const history = JSON.parse(historyStr);
+        history[weekOf] = { ...dataToSave, lastModified: new Date().toISOString() };
+        localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(history));
+      } catch (e) {
+        console.error('Failed to save to history', e);
+      }
+    }
   }, [name, weekOf, records, signature, date, recipientEmail]);
 
   // Auto-calculate total hours when records change
@@ -186,17 +205,82 @@ export default function App() {
   };
 
   const handleClear = () => {
-    if (window.confirm('Are you sure you want to clear all fields?')) {
-      setName('');
-      setWeekOf('');
-      setRecords(initialRecords);
-      setTotalHours('');
-      setSignature('');
-      sigCanvas.current?.clear();
-      setDate('');
-      setRecipientEmail(DEFAULT_EMAIL);
+    setShowClearConfirm(true);
+  };
+
+  const confirmClear = () => {
+    setName('');
+    setWeekOf('');
+    setRecords(initialRecords);
+    setTotalHours('');
+    setSignature('');
+    sigCanvas.current?.clear();
+    setDate('');
+    setRecipientEmail(DEFAULT_EMAIL);
+    setShowClearConfirm(false);
+  };
+
+  const openHistory = () => {
+    try {
+      const historyStr = localStorage.getItem(HISTORY_STORAGE_KEY) || '{}';
+      setHistoryData(JSON.parse(historyStr));
+    } catch (e) {
+      console.error('Failed to load history', e);
+    }
+    setIsHistoryOpen(true);
+  };
+
+  const loadHistoryItem = (week: string) => {
+    const data = historyData[week];
+    if (data) {
+      setName(data.name || '');
+      setWeekOf(data.weekOf || '');
+      setRecords(data.records || initialRecords);
+      setSignature(data.signature || '');
+      setDate(data.date || '');
+      setRecipientEmail(data.recipientEmail || DEFAULT_EMAIL);
+      setIsHistoryOpen(false);
+      
+      // Update signature canvas
+      setTimeout(() => {
+        if (sigCanvas.current && data.signature && data.signature.startsWith('data:image')) {
+          sigCanvas.current.clear();
+          sigCanvas.current.fromDataURL(data.signature);
+        } else if (sigCanvas.current) {
+          sigCanvas.current.clear();
+        }
+      }, 100);
     }
   };
+
+  const deleteHistoryItem = (week: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    try {
+      const historyStr = localStorage.getItem(HISTORY_STORAGE_KEY) || '{}';
+      const history = JSON.parse(historyStr);
+      delete history[week];
+      localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(history));
+      setHistoryData(history);
+    } catch (err) {
+      console.error('Failed to delete history item', err);
+    }
+  };
+
+  const filteredHistory = Object.entries(historyData)
+    .filter(([week, data]) => {
+      const term = historySearchTerm.toLowerCase();
+      if (!term) return true;
+      if (week.toLowerCase().includes(term)) return true;
+      if (data.name && data.name.toLowerCase().includes(term)) return true;
+      // Search by day or date in records
+      if (data.records && data.records.some((r: any) => 
+        (r.day && r.day.toLowerCase().includes(term)) || 
+        (r.date && r.date.toLowerCase().includes(term)) ||
+        (r.notes && r.notes.toLowerCase().includes(term))
+      )) return true;
+      return false;
+    })
+    .sort((a, b) => b[0].localeCompare(a[0])); // Sort by week descending
 
   return (
     <div className="min-h-screen bg-gray-50 py-4 sm:py-8 px-2 sm:px-6 lg:px-8 print:bg-white print:py-0 print:px-0">
@@ -221,6 +305,13 @@ export default function App() {
               </div>
             )}
             <div className="flex gap-2">
+              <button
+                onClick={openHistory}
+                className="flex-1 sm:flex-none flex justify-center items-center gap-2 px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+              >
+                <History className="w-4 h-4" />
+                History
+              </button>
               <button
                 onClick={handleClear}
                 className="flex-1 sm:flex-none flex justify-center items-center gap-2 px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
@@ -529,6 +620,108 @@ export default function App() {
 
           </div>
         </div>
+
+        {/* Modals */}
+        {showClearConfirm && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-xl shadow-xl max-w-sm w-full p-6">
+              <h3 className="text-lg font-semibold text-gray-900 mb-2">Clear Timesheet?</h3>
+              <p className="text-gray-600 mb-6">Are you sure you want to clear all fields? This action cannot be undone.</p>
+              <div className="flex justify-end gap-3">
+                <button
+                  onClick={() => setShowClearConfirm(false)}
+                  className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={confirmClear}
+                  className="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 transition-colors"
+                >
+                  Clear All
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {isHistoryOpen && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-xl shadow-xl max-w-2xl w-full max-h-[80vh] flex flex-col">
+              <div className="flex items-center justify-between p-4 sm:p-6 border-b border-gray-100">
+                <h3 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
+                  <History className="w-5 h-5 text-indigo-600" />
+                  Timesheet History
+                </h3>
+                <button
+                  onClick={() => setIsHistoryOpen(false)}
+                  className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+              
+              <div className="p-4 sm:p-6 border-b border-gray-100 bg-gray-50">
+                <div className="relative">
+                  <Search className="w-5 h-5 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    placeholder="Search by week, name, or day..."
+                    value={historySearchTerm}
+                    onChange={(e) => setHistorySearchTerm(e.target.value)}
+                    className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                  />
+                </div>
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-4 sm:p-6">
+                {filteredHistory.length === 0 ? (
+                  <div className="text-center py-8 text-gray-500">
+                    No history found matching your search.
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {filteredHistory.map(([week, data]) => (
+                      <div
+                        key={week}
+                        onClick={() => loadHistoryItem(week)}
+                        className="group flex items-center justify-between p-4 bg-white border border-gray-200 rounded-xl hover:border-indigo-300 hover:shadow-sm cursor-pointer transition-all"
+                      >
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-3 mb-1">
+                            <span className="font-medium text-gray-900">Week of {week}</span>
+                            {data.name && (
+                              <span className="px-2 py-0.5 text-xs font-medium text-indigo-700 bg-indigo-50 rounded-full">
+                                {data.name}
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-sm text-gray-500 flex items-center gap-4">
+                            <span>{data.records?.filter((r: any) => r.totalHours).length || 0} days logged</span>
+                            <span>Total: {data.records?.reduce((acc: number, r: any) => acc + (parseFloat(r.totalHours) || 0), 0).toFixed(2) || '0.00'} hrs</span>
+                            {data.lastModified && (
+                              <span className="hidden sm:inline">Last edited: {new Date(data.lastModified).toLocaleDateString()}</span>
+                            )}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={(e) => deleteHistoryItem(week, e)}
+                            className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg opacity-0 group-hover:opacity-100 transition-all"
+                            title="Delete from history"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                          <ChevronRight className="w-5 h-5 text-gray-400 group-hover:text-indigo-600 transition-colors" />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
