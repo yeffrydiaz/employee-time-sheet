@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Mail, Printer, Calculator, RefreshCw, Save, Loader2, History, Search, X, ChevronRight, Trash2 } from 'lucide-react';
+import { Mail, Printer, Calculator, RefreshCw, Save, Loader2, History, Search, X, ChevronRight, Trash2, CheckCircle2 } from 'lucide-react';
 import SignatureCanvas from 'react-signature-canvas';
+import { motion, AnimatePresence } from 'motion/react';
 
 interface DailyRecord {
   day: string;
@@ -42,6 +43,7 @@ const loadSavedData = () => {
 export default function App() {
   const savedData = loadSavedData();
   
+  const [companyName, setCompanyName] = useState(savedData?.companyName || 'Royal Transportation');
   const [name, setName] = useState(savedData?.name || '');
   const [weekOf, setWeekOf] = useState(savedData?.weekOf || '');
   const [records, setRecords] = useState<DailyRecord[]>(savedData?.records || initialRecords);
@@ -57,6 +59,8 @@ export default function App() {
   const [historySearchTerm, setHistorySearchTerm] = useState('');
   const [historyData, setHistoryData] = useState<Record<string, any>>({});
   const [showClearConfirm, setShowClearConfirm] = useState(false);
+  const [showEmailConfirm, setShowEmailConfirm] = useState(false);
+  const [showSavedIndicator, setShowSavedIndicator] = useState(false);
 
   const sigCanvas = useRef<SignatureCanvas>(null);
 
@@ -69,9 +73,14 @@ export default function App() {
 
   // Save to local storage whenever data changes
   useEffect(() => {
-    const dataToSave = { name, weekOf, records, signature, date, recipientEmail };
+    const dataToSave = { companyName, name, weekOf, records, signature, date, recipientEmail };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(dataToSave));
     setLastSaved(new Date());
+    
+    setShowSavedIndicator(true);
+    const timer = setTimeout(() => {
+      setShowSavedIndicator(false);
+    }, 2000);
 
     // Also save to history if weekOf is set
     if (weekOf) {
@@ -84,7 +93,9 @@ export default function App() {
         console.error('Failed to save to history', e);
       }
     }
-  }, [name, weekOf, records, signature, date, recipientEmail]);
+    
+    return () => clearTimeout(timer);
+  }, [companyName, name, weekOf, records, signature, date, recipientEmail]);
 
   // Auto-calculate total hours when records change
   useEffect(() => {
@@ -183,7 +194,12 @@ export default function App() {
     setRecords(newRecords);
   };
 
-  const handleSendEmail = () => {
+  const handleSendEmailClick = () => {
+    setShowEmailConfirm(true);
+  };
+
+  const confirmSendEmail = () => {
+    setShowEmailConfirm(false);
     setIsSending(true);
     
     // Simulate a brief loading state for visual feedback
@@ -314,15 +330,21 @@ export default function App() {
               <Calculator className="w-6 h-6" />
             </div>
             <div>
-              <div className="text-sm sm:text-base font-bold text-indigo-600 uppercase tracking-wider">Royal Transportation</div>
+              <input
+                type="text"
+                value={companyName}
+                onChange={(e) => setCompanyName(e.target.value)}
+                className="text-sm sm:text-base font-bold text-indigo-600 uppercase tracking-wider bg-transparent border-0 border-b border-transparent hover:border-indigo-200 focus:border-indigo-600 focus:ring-0 p-0 m-0 w-full sm:w-64"
+                placeholder="Company Name"
+              />
               <h1 className="text-xl font-semibold text-gray-900 leading-tight">Time Sheet Manager</h1>
             </div>
           </div>
           <div className="flex flex-col sm:flex-row w-full md:w-auto items-stretch sm:items-center gap-3">
             {lastSaved && (
-              <div className="text-xs text-gray-500 flex items-center justify-center sm:justify-start gap-1 sm:mr-2">
+              <div className="text-xs text-gray-400 flex items-center justify-center sm:justify-start gap-1 sm:mr-2">
                 <Save className="w-3 h-3" />
-                Saved {lastSaved.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                Last saved {lastSaved.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
               </div>
             )}
             <div className="flex flex-wrap gap-2 w-full sm:w-auto">
@@ -357,7 +379,7 @@ export default function App() {
                 className="px-0 py-0.5 text-xl font-bold border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 w-full sm:w-56"
               />
               <button
-                onClick={handleSendEmail}
+                onClick={handleSendEmailClick}
                 disabled={isSending}
                 className="flex justify-center items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 transition-colors shadow-sm disabled:opacity-70 disabled:cursor-not-allowed min-w-[100px]"
               >
@@ -667,6 +689,29 @@ export default function App() {
           </div>
         )}
 
+        {showEmailConfirm && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-xl shadow-xl max-w-sm w-full p-6">
+              <h3 className="text-lg font-semibold text-gray-900 mb-2">Send Timesheet?</h3>
+              <p className="text-gray-600 mb-6">Are you sure you want to send this timesheet to {recipientEmail}?</p>
+              <div className="flex justify-end gap-3">
+                <button
+                  onClick={() => setShowEmailConfirm(false)}
+                  className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={confirmSendEmail}
+                  className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 transition-colors"
+                >
+                  Send Email
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {isHistoryOpen && (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
             <div className="bg-white rounded-xl shadow-xl max-w-2xl w-full max-h-[80vh] flex flex-col">
@@ -744,6 +789,21 @@ export default function App() {
             </div>
           </div>
         )}
+
+        {/* Toast Notification */}
+        <AnimatePresence>
+          {showSavedIndicator && lastSaved && (
+            <motion.div
+              initial={{ opacity: 0, y: 50, scale: 0.9 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.9, transition: { duration: 0.2 } }}
+              className="fixed bottom-6 right-6 z-50 flex items-center gap-2 px-4 py-3 bg-gray-900 text-white rounded-lg shadow-xl"
+            >
+              <CheckCircle2 className="w-5 h-5 text-emerald-400" />
+              <span className="text-sm font-medium">Changes saved</span>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
     </div>
   );
