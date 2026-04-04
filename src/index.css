@@ -86,12 +86,27 @@
   #timesheet-content {
     width: 100% !important;
     max-width: 100% !important;
-    transform: scale(0.85);
-    transform-origin: top center;
   }
 
   /* Ensure the table container doesn't hide overflow during print */
   .print\:overflow-visible {
     overflow: visible !important;
+  }
+
+  /* Hide input icons and spinners for printing to reduce minimum width */
+  input[type="time"]::-webkit-calendar-picker-indicator,
+  input[type="date"]::-webkit-calendar-picker-indicator,
+  input[type="time"]::-webkit-clear-button,
+  input[type="date"]::-webkit-clear-button,
+  input[type="number"]::-webkit-inner-spin-button,
+  input[type="number"]::-webkit-outer-spin-button {
+    display: none !important;
+    -webkit-appearance: none !important;
+  }
+
+  input[type="time"], input[type="date"] {
+    -webkit-appearance: none !important;
+    -moz-appearance: none !important;
+    appearance: none !important;
   }
 }
