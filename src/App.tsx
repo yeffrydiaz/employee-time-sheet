@@ -2,6 +2,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Mail, Printer, Calculator, RefreshCw, Save, Loader2, History, Search, X, ChevronRight, Trash2, CheckCircle2 } from 'lucide-react';
 import SignatureCanvas from 'react-signature-canvas';
 import { motion, AnimatePresence } from 'motion/react';
+import jsPDF from 'jspdf';
+import html2canvas from 'html2canvas';
 
 interface DailyRecord {
   day: string;
@@ -48,6 +50,7 @@ export default function App() {
   const [weekOf, setWeekOf] = useState(savedData?.weekOf || '');
   const [records, setRecords] = useState<DailyRecord[]>(savedData?.records || initialRecords);
   const [totalHours, setTotalHours] = useState('');
+  const [hourlyRate, setHourlyRate] = useState(savedData?.hourlyRate || '');
   const [signature, setSignature] = useState(savedData?.signature || '');
   const [date, setDate] = useState(savedData?.date || '');
   const [recipientEmail, setRecipientEmail] = useState(savedData?.recipientEmail || DEFAULT_EMAIL);
@@ -73,7 +76,7 @@ export default function App() {
 
   // Save to local storage whenever data changes
   useEffect(() => {
-    const dataToSave = { companyName, name, weekOf, records, signature, date, recipientEmail };
+    const dataToSave = { companyName, name, weekOf, records, signature, date, recipientEmail, hourlyRate };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(dataToSave));
     setLastSaved(new Date());
     
@@ -95,7 +98,7 @@ export default function App() {
     }
     
     return () => clearTimeout(timer);
-  }, [companyName, name, weekOf, records, signature, date, recipientEmail]);
+  }, [companyName, name, weekOf, records, signature, date, recipientEmail, hourlyRate]);
 
   // Auto-calculate total hours when records change
   useEffect(() => {
@@ -179,11 +182,52 @@ export default function App() {
     const errs: Partial<Record<keyof DailyRecord, string>> = {};
     const timeRegex = /^([01]?[0-9]|2[0-3]):[0-5][0-9]$/;
     
-    if (record.timeIn && !timeRegex.test(record.timeIn)) errs.timeIn = "Invalid format (HH:MM)";
-    if (record.lunchStart && !timeRegex.test(record.lunchStart)) errs.lunchStart = "Invalid format (HH:MM)";
-    if (record.lunchEnd && !timeRegex.test(record.lunchEnd)) errs.lunchEnd = "Invalid format (HH:MM)";
-    if (record.timeOut && !timeRegex.test(record.timeOut)) errs.timeOut = "Invalid format (HH:MM)";
+    const isValidTime = (t: string | undefined) => t ? timeRegex.test(t) : false;
+
+    if (record.timeIn && !isValidTime(record.timeIn)) errs.timeIn = "Invalid format (HH:MM)";
+    if (record.lunchStart && !isValidTime(record.lunchStart)) errs.lunchStart = "Invalid format (HH:MM)";
+    if (record.lunchEnd && !isValidTime(record.lunchEnd)) errs.lunchEnd = "Invalid format (HH:MM)";
+    if (record.timeOut && !isValidTime(record.timeOut)) errs.timeOut = "Invalid format (HH:MM)";
     if (record.totalHours && isNaN(Number(record.totalHours))) errs.totalHours = "Must be a number";
+    
+    if (isValidTime(record.timeIn) && isValidTime(record.timeOut)) {
+      const parseTime = (timeStr: string) => {
+        const [hours, minutes] = timeStr.split(':').map(Number);
+        return hours + minutes / 60;
+      };
+
+      const inTime = parseTime(record.timeIn!);
+      let outTime = parseTime(record.timeOut!);
+      if (outTime < inTime) outTime += 24;
+
+      let lStart = isValidTime(record.lunchStart) ? parseTime(record.lunchStart!) : null;
+      let lEnd = isValidTime(record.lunchEnd) ? parseTime(record.lunchEnd!) : null;
+
+      if (lStart !== null) {
+        if (lStart < inTime) lStart += 24;
+        if (lStart > outTime) errs.lunchStart = "Must be within work hours";
+      }
+
+      if (lEnd !== null) {
+        if (lStart !== null) {
+          if (lEnd < lStart) {
+            // If the lunch break appears to be over 12 hours after adjusting for midnight,
+            // it's highly likely the user entered an end time that is before the start time.
+            if ((lEnd + 24) - lStart > 12) {
+              errs.lunchEnd = "Must be after Lunch Start";
+            } else {
+              lEnd += 24;
+            }
+          }
+        } else if (lEnd < inTime) {
+          lEnd += 24;
+        }
+        
+        if (!errs.lunchEnd && lEnd > outTime) {
+          errs.lunchEnd = "Must be within work hours";
+        }
+      }
+    }
     
     return errs;
   };
@@ -198,43 +242,103 @@ export default function App() {
     setShowEmailConfirm(true);
   };
 
-  const confirmSendEmail = () => {
+  const confirmSendEmail = async () => {
     setShowEmailConfirm(false);
     setIsSending(true);
     
-    // Simulate a brief loading state for visual feedback
-    setTimeout(() => {
-      const subject = encodeURIComponent(`Time Sheet: ${name || 'Employee'} - Week of ${weekOf || 'Unknown'}`);
-      
-      let bodyText = `Employee Time Sheet\n`;
-      bodyText += `===================\n\n`;
-      bodyText += `Name: ${name}\n`;
-      bodyText += `Week of: ${weekOf}\n\n`;
-      
-      bodyText += `Daily Records:\n`;
-      bodyText += `--------------\n`;
-      records.forEach(r => {
-        if (r.date || r.timeIn || r.timeOut || r.totalHours) {
-          bodyText += `${r.day} (${r.date || 'No Date'}):\n`;
-          bodyText += `  Time In: ${r.timeIn || '-'}\n`;
-          bodyText += `  Lunch: ${r.lunchStart || '-'} to ${r.lunchEnd || '-'}\n`;
-          bodyText += `  Time Out: ${r.timeOut || '-'}\n`;
-          bodyText += `  Total Hours: ${r.totalHours || '0'}\n`;
-          if (r.notes) bodyText += `  Notes: ${r.notes}\n`;
-          bodyText += `\n`;
+    // Wait for React to re-render and remove the modal from the DOM
+    setTimeout(async () => {
+      try {
+        // 1. Generate PDF
+        const contentElement = document.getElementById('timesheet-content');
+        if (contentElement) {
+          // Temporarily hide elements we don't want in the PDF
+          const elementsToHide = contentElement.querySelectorAll('.print\\:hidden');
+          elementsToHide.forEach(el => (el as HTMLElement).style.display = 'none');
+          
+          const canvas = await html2canvas(contentElement, {
+            scale: 2,
+            useCORS: true,
+            logging: false
+          });
+          
+          // Restore hidden elements
+          elementsToHide.forEach(el => (el as HTMLElement).style.display = '');
+
+          const imgData = canvas.toDataURL('image/png');
+          const pdf = new jsPDF({
+            orientation: 'portrait',
+            unit: 'mm',
+            format: 'a4'
+          });
+          
+          const pdfWidth = pdf.internal.pageSize.getWidth();
+          const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
+          
+          pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
+          
+          // Download the PDF
+          const fileName = `Timesheet_${name || 'Employee'}_${weekOf || 'Week'}.pdf`.replace(/\s+/g, '_');
+          pdf.save(fileName);
         }
-      });
-      
-      bodyText += `--------------\n`;
-      bodyText += `Total Weekly Hours: ${totalHours}\n\n`;
-      bodyText += `Employee Signature: ${signature ? '[Electronically Signed]' : 'Not Signed'}\n`;
-      bodyText += `Date: ${date}\n`;
-      
-      const body = encodeURIComponent(bodyText);
-      
-      window.location.href = `mailto:${recipientEmail}?subject=${subject}&body=${body}`;
-      setIsSending(false);
-    }, 800);
+
+        // 2. Open Email Client
+        const subject = encodeURIComponent(`Time Sheet: ${name || 'Employee'} - Week of ${weekOf || 'Unknown'}`);
+        
+        let bodyText = `Employee Time Sheet\n`;
+        bodyText += `===================\n\n`;
+        bodyText += `Name: ${name}\n`;
+        bodyText += `Week of: ${weekOf}\n\n`;
+        bodyText += `IMPORTANT: Please attach the downloaded PDF timesheet to this email before sending.\n\n`;
+        
+        bodyText += `Daily Records:\n`;
+        bodyText += `--------------\n`;
+        records.forEach(r => {
+          if (r.date || r.timeIn || r.timeOut || r.totalHours) {
+            bodyText += `${r.day} (${r.date || 'No Date'}):\n`;
+            bodyText += `  Time In: ${r.timeIn || '-'}\n`;
+            bodyText += `  Lunch: ${r.lunchStart || '-'} to ${r.lunchEnd || '-'}\n`;
+            bodyText += `  Time Out: ${r.timeOut || '-'}\n`;
+            bodyText += `  Total Hours: ${r.totalHours || '0'}\n`;
+            if (r.notes) bodyText += `  Notes: ${r.notes}\n`;
+            bodyText += `\n`;
+          }
+        });
+        
+        bodyText += `--------------\n`;
+        bodyText += `Total Weekly Hours: ${totalHours}\n`;
+        
+        const totalWeeklyHoursNum = parseFloat(totalHours) || 0;
+        const rate = parseFloat(hourlyRate) || 0;
+        if (rate > 0 && totalWeeklyHoursNum > 0) {
+          const regularHours = Math.min(totalWeeklyHoursNum, 40);
+          const overtimeHours = Math.max(0, totalWeeklyHoursNum - 40);
+          const regularPay = regularHours * rate;
+          const overtimePay = overtimeHours * (rate * 1.5);
+          const totalPay = regularPay + overtimePay;
+          
+          bodyText += `Hourly Rate: $${rate.toFixed(2)}\n`;
+          bodyText += `Regular Hours: ${regularHours.toFixed(2)}h ($${regularPay.toFixed(2)})\n`;
+          if (overtimeHours > 0) {
+            bodyText += `Overtime Hours: ${overtimeHours.toFixed(2)}h ($${overtimePay.toFixed(2)})\n`;
+          }
+          bodyText += `Total Pay: $${totalPay.toFixed(2)}\n`;
+        }
+        bodyText += `\n`;
+        
+        bodyText += `Employee Signature: ${signature ? '[Electronically Signed]' : 'Not Signed'}\n`;
+        bodyText += `Date: ${date}\n`;
+        
+        const body = encodeURIComponent(bodyText);
+        window.location.href = `mailto:${recipientEmail}?subject=${subject}&body=${body}`;
+        
+      } catch (error) {
+        console.error('Error generating PDF or sending email:', error);
+        alert('There was an error generating the PDF. Please try again.');
+      } finally {
+        setIsSending(false);
+      }
+    }, 100);
   };
 
   const handlePrint = () => {
@@ -250,6 +354,7 @@ export default function App() {
     setWeekOf('');
     setRecords(initialRecords);
     setTotalHours('');
+    setHourlyRate('');
     setSignature('');
     sigCanvas.current?.clear();
     setDate('');
@@ -319,9 +424,17 @@ export default function App() {
     })
     .sort((a, b) => b[0].localeCompare(a[0])); // Sort by week descending
 
+  const totalWeeklyHoursNum = parseFloat(totalHours) || 0;
+  const regularHours = Math.min(totalWeeklyHoursNum, 40);
+  const overtimeHours = Math.max(0, totalWeeklyHoursNum - 40);
+  const rate = parseFloat(hourlyRate) || 0;
+  const regularPay = regularHours * rate;
+  const overtimePay = overtimeHours * (rate * 1.5);
+  const totalPay = regularPay + overtimePay;
+
   return (
     <div className="min-h-screen bg-gray-50 py-4 sm:py-8 px-2 sm:px-6 lg:px-8 print:bg-white print:py-0 print:px-0">
-      <div className="max-w-5xl mx-auto space-y-4 sm:space-y-6">
+      <div id="timesheet-content" className="max-w-5xl mx-auto space-y-4 sm:space-y-6">
         
         {/* Header Actions - Hidden when printing */}
         <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-white p-4 rounded-xl shadow-sm border border-gray-100 print:hidden">
@@ -517,16 +630,16 @@ export default function App() {
             </div>
 
             {/* Desktop Table View (Visible on Desktop & Print) */}
-            <div className="hidden md:block print:block overflow-x-auto mb-10 border border-gray-200 rounded-xl">
+            <div className="hidden md:block print:block overflow-x-auto print:overflow-visible mb-10 border border-gray-200 rounded-xl">
               <table className="min-w-full divide-y divide-gray-200">
                 <thead className="bg-gray-50">
                   <tr>
-                    <th scope="col" className="px-2 py-3 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider w-40">Date</th>
-                    <th scope="col" className="px-2 py-3 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider w-24">Time In</th>
-                    <th scope="col" className="px-2 py-3 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider w-24">Lunch Start</th>
-                    <th scope="col" className="px-2 py-3 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider w-24">Lunch End</th>
-                    <th scope="col" className="px-2 py-3 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider w-24">Time Out</th>
-                    <th scope="col" className="px-0 py-3 text-center text-sm font-semibold text-gray-600 uppercase tracking-wider w-20">Total Hrs</th>
+                    <th scope="col" className="px-2 py-3 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider w-40 print:w-32">Date</th>
+                    <th scope="col" className="px-2 py-3 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider w-24 print:w-20">Time In</th>
+                    <th scope="col" className="px-2 py-3 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider w-24 print:w-20">Lunch Start</th>
+                    <th scope="col" className="px-2 py-3 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider w-24 print:w-20">Lunch End</th>
+                    <th scope="col" className="px-2 py-3 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider w-24 print:w-20">Time Out</th>
+                    <th scope="col" className="px-0 py-3 text-center text-sm font-semibold text-gray-600 uppercase tracking-wider w-20 print:w-16">Total Hrs</th>
                     <th scope="col" className="px-2 py-3 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">Notes</th>
                   </tr>
                 </thead>
@@ -534,14 +647,14 @@ export default function App() {
                   {records.map((record, index) => {
                     const errors = getErrors(record);
                     return (
-                    <tr key={record.day} className="hover:bg-gray-50/50 transition-colors">
-                      <td className="px-2 py-2 align-top bg-gray-50/30">
+                    <tr key={record.day} className="hover:bg-gray-100 transition-colors">
+                      <td className="px-2 py-2 align-top bg-gray-50">
                         <div className="text-sm font-medium text-gray-900 mb-1 ml-1">{record.day}</div>
                         <input
                           type="date"
                           value={record.date}
                           onChange={(e) => handleRecordChange(index, 'date', e.target.value)}
-                          className="w-full border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 text-xl font-bold py-0 px-0"
+                          className="w-full border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 text-xl print:text-sm font-bold py-0 px-0"
                         />
                       </td>
                       <td className="px-2 py-2 align-top">
@@ -550,7 +663,7 @@ export default function App() {
                           type="time"
                           value={record.timeIn}
                           onChange={(e) => handleRecordChange(index, 'timeIn', e.target.value)}
-                          className={`w-full rounded-md shadow-sm text-xl font-bold py-0 px-0 ${errors.timeIn ? 'border-red-500 focus:ring-red-500 focus:border-red-500' : 'border-gray-300 focus:ring-indigo-500 focus:border-indigo-500'}`}
+                          className={`w-full rounded-md shadow-sm text-xl print:text-sm font-bold py-0 px-0 ${errors.timeIn ? 'border-red-500 focus:ring-red-500 focus:border-red-500' : 'border-gray-300 focus:ring-indigo-500 focus:border-indigo-500'}`}
                         />
                         {errors.timeIn && <div className="text-[10px] text-red-500 mt-1">{errors.timeIn}</div>}
                       </td>
@@ -560,7 +673,7 @@ export default function App() {
                           type="time"
                           value={record.lunchStart}
                           onChange={(e) => handleRecordChange(index, 'lunchStart', e.target.value)}
-                          className={`w-full rounded-md shadow-sm text-xl font-bold py-0 px-0 ${errors.lunchStart ? 'border-red-500 focus:ring-red-500 focus:border-red-500' : 'border-gray-300 focus:ring-indigo-500 focus:border-indigo-500'}`}
+                          className={`w-full rounded-md shadow-sm text-xl print:text-sm font-bold py-0 px-0 ${errors.lunchStart ? 'border-red-500 focus:ring-red-500 focus:border-red-500' : 'border-gray-300 focus:ring-indigo-500 focus:border-indigo-500'}`}
                         />
                         {errors.lunchStart && <div className="text-[10px] text-red-500 mt-1">{errors.lunchStart}</div>}
                       </td>
@@ -570,7 +683,7 @@ export default function App() {
                           type="time"
                           value={record.lunchEnd}
                           onChange={(e) => handleRecordChange(index, 'lunchEnd', e.target.value)}
-                          className={`w-full rounded-md shadow-sm text-xl font-bold py-0 px-0 ${errors.lunchEnd ? 'border-red-500 focus:ring-red-500 focus:border-red-500' : 'border-gray-300 focus:ring-indigo-500 focus:border-indigo-500'}`}
+                          className={`w-full rounded-md shadow-sm text-xl print:text-sm font-bold py-0 px-0 ${errors.lunchEnd ? 'border-red-500 focus:ring-red-500 focus:border-red-500' : 'border-gray-300 focus:ring-indigo-500 focus:border-indigo-500'}`}
                         />
                         {errors.lunchEnd && <div className="text-[10px] text-red-500 mt-1">{errors.lunchEnd}</div>}
                       </td>
@@ -580,7 +693,7 @@ export default function App() {
                           type="time"
                           value={record.timeOut}
                           onChange={(e) => handleRecordChange(index, 'timeOut', e.target.value)}
-                          className={`w-full rounded-md shadow-sm text-xl font-bold py-0 px-0 ${errors.timeOut ? 'border-red-500 focus:ring-red-500 focus:border-red-500' : 'border-gray-300 focus:ring-indigo-500 focus:border-indigo-500'}`}
+                          className={`w-full rounded-md shadow-sm text-xl print:text-sm font-bold py-0 px-0 ${errors.timeOut ? 'border-red-500 focus:ring-red-500 focus:border-red-500' : 'border-gray-300 focus:ring-indigo-500 focus:border-indigo-500'}`}
                         />
                         {errors.timeOut && <div className="text-[10px] text-red-500 mt-1">{errors.timeOut}</div>}
                       </td>
@@ -590,7 +703,7 @@ export default function App() {
                           type="text"
                           value={record.totalHours}
                           onChange={(e) => handleRecordChange(index, 'totalHours', e.target.value)}
-                          className={`w-16 rounded-md shadow-sm text-2xl font-extrabold py-0 px-0 font-mono bg-indigo-50 text-indigo-700 text-center ${errors.totalHours ? 'border-red-500 focus:ring-red-500 focus:border-red-500' : 'border-gray-300 focus:ring-indigo-500 focus:border-indigo-500'}`}
+                          className={`w-16 rounded-md shadow-sm text-2xl print:text-base font-extrabold py-0 px-0 font-mono bg-indigo-50 text-indigo-700 text-center ${errors.totalHours ? 'border-red-500 focus:ring-red-500 focus:border-red-500' : 'border-gray-300 focus:ring-indigo-500 focus:border-indigo-500'}`}
                           placeholder="0.00"
                         />
                         {errors.totalHours && <div className="text-[10px] text-red-500 mt-1">{errors.totalHours}</div>}
@@ -601,7 +714,7 @@ export default function App() {
                           type="text"
                           value={record.notes}
                           onChange={(e) => handleRecordChange(index, 'notes', e.target.value)}
-                          className="w-full border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 text-xl font-bold py-0 px-0"
+                          className="w-full border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 text-xl print:text-sm font-bold py-0 px-0"
                           placeholder="..."
                         />
                       </td>
@@ -646,7 +759,22 @@ export default function App() {
               </div>
               
               <div className="w-full md:w-1/3 bg-gray-50 p-4 sm:p-6 rounded-xl border border-gray-200">
-                <div className="flex justify-between items-center">
+                <div className="flex justify-between items-center mb-4">
+                  <span className="text-base sm:text-lg font-medium text-gray-700">Hourly Rate:</span>
+                  <div className="relative">
+                    <span className="absolute left-0 top-1/2 -translate-y-1/2 text-gray-500 font-bold">$</span>
+                    <input
+                      type="number"
+                      value={hourlyRate}
+                      onChange={(e) => setHourlyRate(e.target.value)}
+                      className="w-24 sm:w-32 text-right text-lg sm:text-xl font-bold text-gray-800 bg-transparent border-b-2 border-gray-300 focus:border-indigo-600 focus:ring-0 px-0 py-1 pl-4"
+                      placeholder="0.00"
+                      min="0"
+                      step="0.01"
+                    />
+                  </div>
+                </div>
+                <div className="flex justify-between items-center mb-4">
                   <span className="text-base sm:text-lg font-medium text-gray-700">Total Hours:</span>
                   <input
                     type="text"
@@ -659,6 +787,25 @@ export default function App() {
                     <div className="text-red-500 text-xs mt-1 text-right">Invalid number</div>
                   )}
                 </div>
+                
+                {hourlyRate && !isNaN(Number(hourlyRate)) && totalWeeklyHoursNum > 0 && (
+                  <div className="mt-4 pt-4 border-t border-gray-200 space-y-2">
+                    <div className="flex justify-between items-center text-sm text-gray-600">
+                      <span>Regular ({regularHours.toFixed(2)}h):</span>
+                      <span>${regularPay.toFixed(2)}</span>
+                    </div>
+                    {overtimeHours > 0 && (
+                      <div className="flex justify-between items-center text-sm text-amber-600 font-medium">
+                        <span>Overtime ({overtimeHours.toFixed(2)}h @ 1.5x):</span>
+                        <span>${overtimePay.toFixed(2)}</span>
+                      </div>
+                    )}
+                    <div className="flex justify-between items-center text-lg font-bold text-gray-900 pt-2 border-t border-gray-200">
+                      <span>Total Pay:</span>
+                      <span>${totalPay.toFixed(2)}</span>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
 
