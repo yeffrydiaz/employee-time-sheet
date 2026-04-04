@@ -253,16 +253,21 @@ export default function App() {
         const contentElement = document.getElementById('timesheet-content');
         if (contentElement) {
           // Temporarily hide elements we don't want in the PDF
-          const elementsToHide = contentElement.querySelectorAll('.print\\:hidden');
+          const elementsToHide = contentElement.querySelectorAll('.print\\:hidden, .pdf\\:hidden');
           elementsToHide.forEach(el => (el as HTMLElement).style.display = 'none');
+          
+          // Add pdf-mode class to trigger print-like styles
+          contentElement.classList.add('pdf-mode');
           
           const canvas = await html2canvas(contentElement, {
             scale: 2,
             useCORS: true,
-            logging: false
+            logging: false,
+            windowWidth: 800 // Force a specific width to ensure consistent layout
           });
           
-          // Restore hidden elements
+          // Restore hidden elements and remove pdf-mode
+          contentElement.classList.remove('pdf-mode');
           elementsToHide.forEach(el => (el as HTMLElement).style.display = '');
 
           const imgData = canvas.toDataURL('image/png');
@@ -433,11 +438,11 @@ export default function App() {
   const totalPay = regularPay + overtimePay;
 
   return (
-    <div className="min-h-screen bg-gray-50 py-4 sm:py-8 px-2 sm:px-6 lg:px-8 print:bg-white print:py-0 print:px-0">
-      <div id="timesheet-content" className="max-w-5xl print:max-w-full mx-auto space-y-4 sm:space-y-6">
+    <div className="min-h-screen bg-gray-50 py-4 sm:py-8 px-2 sm:px-6 lg:px-8 print:bg-white pdf:bg-white print:py-0 pdf:py-0 print:px-0 pdf:px-0">
+      <div id="timesheet-content" className="max-w-5xl print:max-w-full pdf:max-w-full mx-auto space-y-4 sm:space-y-6">
         
         {/* Header Actions - Hidden when printing */}
-        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-white p-4 rounded-xl shadow-sm border border-gray-100 print:hidden">
+        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-white p-4 rounded-xl shadow-sm border border-gray-100 print:hidden pdf:hidden">
           <div className="flex items-center gap-3 text-indigo-600">
             <div className="bg-indigo-100 p-2 rounded-lg">
               <Calculator className="w-6 h-6" />
@@ -513,23 +518,23 @@ export default function App() {
         </div>
 
         {/* Main Form Document */}
-        <div className="bg-white shadow-xl rounded-2xl overflow-hidden border border-gray-200 print:shadow-none print:border-none print:rounded-none">
-          <div className="p-4 sm:p-8 md:p-12 print:p-0">
+        <div className="bg-white shadow-xl rounded-2xl overflow-hidden border border-gray-200 print:shadow-none pdf:shadow-none print:border-none pdf:border-none print:rounded-none pdf:rounded-none">
+          <div className="p-4 sm:p-8 md:p-12 print:p-0 pdf:p-0">
             
             {/* Document Header */}
-            <div className="text-center mb-8 sm:mb-10 print:mb-4">
-              <h2 className="text-2xl sm:text-3xl print:text-xl font-bold text-gray-900 tracking-tight">Employee Time Sheet</h2>
+            <div className="text-center mb-8 sm:mb-10 print:mb-4 pdf:mb-4">
+              <h2 className="text-2xl sm:text-3xl print:text-xl pdf:text-xl font-bold text-gray-900 tracking-tight">Employee Time Sheet</h2>
             </div>
 
             {/* Employee Info */}
-            <div className="grid grid-cols-1 md:grid-cols-2 print:grid-cols-2 gap-4 sm:gap-6 mb-8 sm:mb-10 print:mb-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 print:grid-cols-2 pdf:grid-cols-2 gap-4 sm:gap-6 mb-8 sm:mb-10 print:mb-4 pdf:mb-4">
               <div className="space-y-1">
                 <label className="block text-sm font-medium text-gray-700">Name</label>
                 <input
                   type="text"
                   value={name}
                   onChange={handleNameChange}
-                  className="block w-full border-0 border-b-2 border-gray-200 focus:border-indigo-600 focus:ring-0 px-0 py-0.5 text-xl sm:text-2xl print:text-lg print:border-none print:p-0 font-bold transition-colors bg-transparent"
+                  className="block w-full border-0 border-b-2 border-gray-200 focus:border-indigo-600 focus:ring-0 px-0 py-0.5 text-xl sm:text-2xl print:text-lg pdf:text-lg print:border-none pdf:border-none print:p-0 pdf:p-0 font-bold transition-colors bg-transparent"
                   placeholder="John Doe"
                 />
               </div>
@@ -539,13 +544,13 @@ export default function App() {
                   type="date"
                   value={weekOf}
                   onChange={handleWeekOfChange}
-                  className="block w-full border-0 border-b-2 border-gray-200 focus:border-indigo-600 focus:ring-0 px-0 py-0.5 text-xl sm:text-2xl print:text-lg print:border-none print:p-0 font-bold transition-colors bg-transparent"
+                  className="block w-full border-0 border-b-2 border-gray-200 focus:border-indigo-600 focus:ring-0 px-0 py-0.5 text-xl sm:text-2xl print:text-lg pdf:text-lg print:border-none pdf:border-none print:p-0 pdf:p-0 font-bold transition-colors bg-transparent"
                 />
               </div>
             </div>
 
             {/* Mobile Cards View (Hidden on Desktop & Print) */}
-            <div className="block md:hidden print:hidden space-y-6 mb-8">
+            <div className="block md:hidden print:hidden pdf:hidden space-y-6 mb-8">
               {records.map((record, index) => {
                 const errors = getErrors(record);
                 return (
@@ -630,91 +635,91 @@ export default function App() {
             </div>
 
             {/* Desktop Table View (Visible on Desktop & Print) */}
-            <div className="hidden md:block print:block overflow-x-auto print:overflow-visible mb-10 print:mb-4 border border-gray-200 print:border-none rounded-xl print:rounded-none">
-              <table className="min-w-full print:w-full print:table-fixed divide-y divide-gray-200 print:divide-gray-800 print:border-t print:border-b print:border-gray-800">
-                <thead className="bg-gray-50 print:bg-transparent">
+            <div className="hidden md:block print:block pdf:block overflow-x-auto print:overflow-visible pdf:overflow-visible mb-10 print:mb-4 pdf:mb-4 border border-gray-200 print:border-none pdf:border-none rounded-xl print:rounded-none pdf:rounded-none">
+              <table className="min-w-full print:w-full pdf:w-full print:table-fixed pdf:table-fixed divide-y divide-gray-200 print:divide-gray-800 pdf:divide-gray-800 print:border-t pdf:border-t print:border-b pdf:border-b print:border-gray-800 pdf:border-gray-800">
+                <thead className="bg-gray-50 print:bg-transparent pdf:bg-transparent">
                   <tr>
-                    <th scope="col" className="px-2 py-3 print:px-1 print:py-1 text-left text-sm print:text-[10px] font-semibold text-gray-600 uppercase tracking-wider w-40 print:w-[14%]">Date</th>
-                    <th scope="col" className="px-2 py-3 print:px-1 print:py-1 text-left text-sm print:text-[10px] font-semibold text-gray-600 uppercase tracking-wider w-24 print:w-[12%]">Time In</th>
-                    <th scope="col" className="px-2 py-3 print:px-1 print:py-1 text-left text-sm print:text-[10px] font-semibold text-gray-600 uppercase tracking-wider w-24 print:w-[12%]">Lunch Start</th>
-                    <th scope="col" className="px-2 py-3 print:px-1 print:py-1 text-left text-sm print:text-[10px] font-semibold text-gray-600 uppercase tracking-wider w-24 print:w-[12%]">Lunch End</th>
-                    <th scope="col" className="px-2 py-3 print:px-1 print:py-1 text-left text-sm print:text-[10px] font-semibold text-gray-600 uppercase tracking-wider w-24 print:w-[12%]">Time Out</th>
-                    <th scope="col" className="px-0 py-3 print:px-0 print:py-1 text-center text-sm print:text-[10px] font-semibold text-gray-600 uppercase tracking-wider w-20 print:w-[10%]">Total Hrs</th>
-                    <th scope="col" className="px-2 py-3 print:px-1 print:py-1 text-left text-sm print:text-[10px] font-semibold text-gray-600 uppercase tracking-wider print:w-[28%]">Notes</th>
+                    <th scope="col" className="px-2 py-3 print:px-1 pdf:px-1 print:py-1 pdf:py-1 text-left text-sm print:text-[10px] pdf:text-[10px] font-semibold text-gray-600 uppercase tracking-wider w-40 print:w-[14%] pdf:w-[14%]">Date</th>
+                    <th scope="col" className="px-2 py-3 print:px-1 pdf:px-1 print:py-1 pdf:py-1 text-left text-sm print:text-[10px] pdf:text-[10px] font-semibold text-gray-600 uppercase tracking-wider w-24 print:w-[12%] pdf:w-[12%]">Time In</th>
+                    <th scope="col" className="px-2 py-3 print:px-1 pdf:px-1 print:py-1 pdf:py-1 text-left text-sm print:text-[10px] pdf:text-[10px] font-semibold text-gray-600 uppercase tracking-wider w-24 print:w-[12%] pdf:w-[12%]">Lunch Start</th>
+                    <th scope="col" className="px-2 py-3 print:px-1 pdf:px-1 print:py-1 pdf:py-1 text-left text-sm print:text-[10px] pdf:text-[10px] font-semibold text-gray-600 uppercase tracking-wider w-24 print:w-[12%] pdf:w-[12%]">Lunch End</th>
+                    <th scope="col" className="px-2 py-3 print:px-1 pdf:px-1 print:py-1 pdf:py-1 text-left text-sm print:text-[10px] pdf:text-[10px] font-semibold text-gray-600 uppercase tracking-wider w-24 print:w-[12%] pdf:w-[12%]">Time Out</th>
+                    <th scope="col" className="px-0 py-3 print:px-0 pdf:px-0 print:py-1 pdf:py-1 text-center text-sm print:text-[10px] pdf:text-[10px] font-semibold text-gray-600 uppercase tracking-wider w-20 print:w-[10%] pdf:w-[10%]">Total Hrs</th>
+                    <th scope="col" className="px-2 py-3 print:px-1 pdf:px-1 print:py-1 pdf:py-1 text-left text-sm print:text-[10px] pdf:text-[10px] font-semibold text-gray-600 uppercase tracking-wider print:w-[28%] pdf:w-[28%]">Notes</th>
                   </tr>
                 </thead>
-                <tbody className="bg-white print:bg-transparent divide-y divide-gray-200 print:divide-gray-800">
+                <tbody className="bg-white print:bg-transparent pdf:bg-transparent divide-y divide-gray-200 print:divide-gray-800 pdf:divide-gray-800">
                   {records.map((record, index) => {
                     const errors = getErrors(record);
                     return (
                     <tr key={record.day} className="hover:bg-gray-100 transition-colors">
-                      <td className="px-2 py-2 print:px-1 print:py-1 align-top bg-gray-50 print:bg-transparent">
-                        <div className="text-sm print:text-[10px] font-medium text-gray-900 mb-1 ml-1 print:mb-0 print:ml-0">{record.day}</div>
+                      <td className="px-2 py-2 print:px-1 pdf:px-1 print:py-1 pdf:py-1 align-top bg-gray-50 print:bg-transparent pdf:bg-transparent">
+                        <div className="text-sm print:text-[10px] pdf:text-[10px] font-medium text-gray-900 mb-1 ml-1 print:mb-0 pdf:mb-0 print:ml-0 pdf:ml-0">{record.day}</div>
                         <input
                           type="date"
                           value={record.date}
                           onChange={(e) => handleRecordChange(index, 'date', e.target.value)}
-                          className="w-full border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 text-xl print:text-[10px] print:border-none print:bg-transparent print:shadow-none print:p-0 print:min-w-0 font-bold py-0 px-0"
+                          className="w-full border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 text-xl print:text-[10px] pdf:text-[10px] print:border-none pdf:border-none print:bg-transparent pdf:bg-transparent print:shadow-none pdf:shadow-none print:p-0 pdf:p-0 print:min-w-0 pdf:min-w-0 font-bold py-0 px-0"
                         />
                       </td>
-                      <td className="px-2 py-2 print:px-1 print:py-1 align-top">
-                        <div className="h-6 print:hidden"></div>
+                      <td className="px-2 py-2 print:px-1 pdf:px-1 print:py-1 pdf:py-1 align-top">
+                        <div className="h-6 print:hidden pdf:hidden"></div>
                         <input
                           type="time"
                           value={record.timeIn}
                           onChange={(e) => handleRecordChange(index, 'timeIn', e.target.value)}
-                          className={`w-full rounded-md shadow-sm text-xl print:text-[11px] print:border-none print:bg-transparent print:shadow-none print:p-0 print:min-w-0 font-bold py-0 px-0 ${errors.timeIn ? 'border-red-500 focus:ring-red-500 focus:border-red-500' : 'border-gray-300 focus:ring-indigo-500 focus:border-indigo-500'}`}
+                          className={`w-full rounded-md shadow-sm text-xl print:text-[11px] pdf:text-[11px] print:border-none pdf:border-none print:bg-transparent pdf:bg-transparent print:shadow-none pdf:shadow-none print:p-0 pdf:p-0 print:min-w-0 pdf:min-w-0 font-bold py-0 px-0 ${errors.timeIn ? 'border-red-500 focus:ring-red-500 focus:border-red-500' : 'border-gray-300 focus:ring-indigo-500 focus:border-indigo-500'}`}
                         />
-                        {errors.timeIn && <div className="text-[10px] text-red-500 mt-1 print:hidden">{errors.timeIn}</div>}
+                        {errors.timeIn && <div className="text-[10px] text-red-500 mt-1 print:hidden pdf:hidden">{errors.timeIn}</div>}
                       </td>
-                      <td className="px-2 py-2 print:px-1 print:py-1 align-top">
-                        <div className="h-6 print:hidden"></div>
+                      <td className="px-2 py-2 print:px-1 pdf:px-1 print:py-1 pdf:py-1 align-top">
+                        <div className="h-6 print:hidden pdf:hidden"></div>
                         <input
                           type="time"
                           value={record.lunchStart}
                           onChange={(e) => handleRecordChange(index, 'lunchStart', e.target.value)}
-                          className={`w-full rounded-md shadow-sm text-xl print:text-[11px] print:border-none print:bg-transparent print:shadow-none print:p-0 print:min-w-0 font-bold py-0 px-0 ${errors.lunchStart ? 'border-red-500 focus:ring-red-500 focus:border-red-500' : 'border-gray-300 focus:ring-indigo-500 focus:border-indigo-500'}`}
+                          className={`w-full rounded-md shadow-sm text-xl print:text-[11px] pdf:text-[11px] print:border-none pdf:border-none print:bg-transparent pdf:bg-transparent print:shadow-none pdf:shadow-none print:p-0 pdf:p-0 print:min-w-0 pdf:min-w-0 font-bold py-0 px-0 ${errors.lunchStart ? 'border-red-500 focus:ring-red-500 focus:border-red-500' : 'border-gray-300 focus:ring-indigo-500 focus:border-indigo-500'}`}
                         />
-                        {errors.lunchStart && <div className="text-[10px] text-red-500 mt-1 print:hidden">{errors.lunchStart}</div>}
+                        {errors.lunchStart && <div className="text-[10px] text-red-500 mt-1 print:hidden pdf:hidden">{errors.lunchStart}</div>}
                       </td>
-                      <td className="px-2 py-2 print:px-1 print:py-1 align-top">
-                        <div className="h-6 print:hidden"></div>
+                      <td className="px-2 py-2 print:px-1 pdf:px-1 print:py-1 pdf:py-1 align-top">
+                        <div className="h-6 print:hidden pdf:hidden"></div>
                         <input
                           type="time"
                           value={record.lunchEnd}
                           onChange={(e) => handleRecordChange(index, 'lunchEnd', e.target.value)}
-                          className={`w-full rounded-md shadow-sm text-xl print:text-[11px] print:border-none print:bg-transparent print:shadow-none print:p-0 print:min-w-0 font-bold py-0 px-0 ${errors.lunchEnd ? 'border-red-500 focus:ring-red-500 focus:border-red-500' : 'border-gray-300 focus:ring-indigo-500 focus:border-indigo-500'}`}
+                          className={`w-full rounded-md shadow-sm text-xl print:text-[11px] pdf:text-[11px] print:border-none pdf:border-none print:bg-transparent pdf:bg-transparent print:shadow-none pdf:shadow-none print:p-0 pdf:p-0 print:min-w-0 pdf:min-w-0 font-bold py-0 px-0 ${errors.lunchEnd ? 'border-red-500 focus:ring-red-500 focus:border-red-500' : 'border-gray-300 focus:ring-indigo-500 focus:border-indigo-500'}`}
                         />
-                        {errors.lunchEnd && <div className="text-[10px] text-red-500 mt-1 print:hidden">{errors.lunchEnd}</div>}
+                        {errors.lunchEnd && <div className="text-[10px] text-red-500 mt-1 print:hidden pdf:hidden">{errors.lunchEnd}</div>}
                       </td>
-                      <td className="px-2 py-2 print:px-1 print:py-1 align-top">
-                        <div className="h-6 print:hidden"></div>
+                      <td className="px-2 py-2 print:px-1 pdf:px-1 print:py-1 pdf:py-1 align-top">
+                        <div className="h-6 print:hidden pdf:hidden"></div>
                         <input
                           type="time"
                           value={record.timeOut}
                           onChange={(e) => handleRecordChange(index, 'timeOut', e.target.value)}
-                          className={`w-full rounded-md shadow-sm text-xl print:text-[11px] print:border-none print:bg-transparent print:shadow-none print:p-0 print:min-w-0 font-bold py-0 px-0 ${errors.timeOut ? 'border-red-500 focus:ring-red-500 focus:border-red-500' : 'border-gray-300 focus:ring-indigo-500 focus:border-indigo-500'}`}
+                          className={`w-full rounded-md shadow-sm text-xl print:text-[11px] pdf:text-[11px] print:border-none pdf:border-none print:bg-transparent pdf:bg-transparent print:shadow-none pdf:shadow-none print:p-0 pdf:p-0 print:min-w-0 pdf:min-w-0 font-bold py-0 px-0 ${errors.timeOut ? 'border-red-500 focus:ring-red-500 focus:border-red-500' : 'border-gray-300 focus:ring-indigo-500 focus:border-indigo-500'}`}
                         />
-                        {errors.timeOut && <div className="text-[10px] text-red-500 mt-1 print:hidden">{errors.timeOut}</div>}
+                        {errors.timeOut && <div className="text-[10px] text-red-500 mt-1 print:hidden pdf:hidden">{errors.timeOut}</div>}
                       </td>
-                      <td className="px-0 py-2 print:px-0 print:py-1 text-center align-top">
-                        <div className="h-6 print:hidden"></div>
+                      <td className="px-0 py-2 print:px-0 pdf:px-0 print:py-1 pdf:py-1 text-center align-top">
+                        <div className="h-6 print:hidden pdf:hidden"></div>
                         <input
                           type="text"
                           value={record.totalHours}
                           onChange={(e) => handleRecordChange(index, 'totalHours', e.target.value)}
-                          className={`w-16 print:w-full rounded-md shadow-sm text-2xl print:text-[11px] print:border-none print:bg-transparent print:shadow-none print:p-0 print:min-w-0 font-extrabold py-0 px-0 font-mono bg-indigo-50 text-indigo-700 print:text-gray-900 text-center ${errors.totalHours ? 'border-red-500 focus:ring-red-500 focus:border-red-500' : 'border-gray-300 focus:ring-indigo-500 focus:border-indigo-500'}`}
+                          className={`w-16 print:w-full pdf:w-full rounded-md shadow-sm text-2xl print:text-[11px] pdf:text-[11px] print:border-none pdf:border-none print:bg-transparent pdf:bg-transparent print:shadow-none pdf:shadow-none print:p-0 pdf:p-0 print:min-w-0 pdf:min-w-0 font-extrabold py-0 px-0 font-mono bg-indigo-50 text-indigo-700 print:text-gray-900 pdf:text-gray-900 text-center ${errors.totalHours ? 'border-red-500 focus:ring-red-500 focus:border-red-500' : 'border-gray-300 focus:ring-indigo-500 focus:border-indigo-500'}`}
                           placeholder="0.00"
                         />
-                        {errors.totalHours && <div className="text-[10px] text-red-500 mt-1 print:hidden">{errors.totalHours}</div>}
+                        {errors.totalHours && <div className="text-[10px] text-red-500 mt-1 print:hidden pdf:hidden">{errors.totalHours}</div>}
                       </td>
-                      <td className="px-2 py-2 print:px-1 print:py-1 align-top">
-                        <div className="h-6 print:hidden"></div>
+                      <td className="px-2 py-2 print:px-1 pdf:px-1 print:py-1 pdf:py-1 align-top">
+                        <div className="h-6 print:hidden pdf:hidden"></div>
                         <input
                           type="text"
                           value={record.notes}
                           onChange={(e) => handleRecordChange(index, 'notes', e.target.value)}
-                          className="w-full border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 text-xl print:text-[10px] print:border-none print:bg-transparent print:shadow-none print:p-0 print:min-w-0 font-bold py-0 px-0"
+                          className="w-full border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 text-xl print:text-[10px] pdf:text-[10px] print:border-none pdf:border-none print:bg-transparent pdf:bg-transparent print:shadow-none pdf:shadow-none print:p-0 pdf:p-0 print:min-w-0 pdf:min-w-0 font-bold py-0 px-0"
                           placeholder="..."
                         />
                       </td>
@@ -725,24 +730,24 @@ export default function App() {
             </div>
 
             {/* Footer Section */}
-            <div className="flex flex-col md:flex-row print:flex-row justify-between items-end print:items-end gap-4 print:gap-8">
-              <div className="w-full md:w-1/2 print:w-1/2 space-y-6 print:space-y-4">
+            <div className="flex flex-col md:flex-row print:flex-row pdf:flex-row justify-between items-end print:items-end pdf:items-end gap-4 print:gap-8 pdf:gap-8">
+              <div className="w-full md:w-1/2 print:w-1/2 pdf:w-1/2 space-y-6 print:space-y-4 pdf:space-y-4">
                 <div className="space-y-1">
                   <div className="flex justify-between items-end mb-1">
                     <label className="block text-sm font-medium text-gray-700">Employee Signature</label>
                     <button 
                       onClick={() => { sigCanvas.current?.clear(); setSignature(''); }} 
-                      className="text-xs text-indigo-600 hover:text-indigo-800 font-medium print:hidden"
+                      className="text-xs text-indigo-600 hover:text-indigo-800 font-medium print:hidden pdf:hidden"
                     >
                       Clear Signature
                     </button>
                   </div>
-                  <div className="border border-gray-300 print:border-b-2 print:border-x-0 print:border-t-0 print:border-gray-800 print:rounded-none rounded-lg bg-white overflow-hidden shadow-sm print:shadow-none">
+                  <div className="border border-gray-300 print:border-b-2 pdf:border-b-2 print:border-x-0 pdf:border-x-0 print:border-t-0 pdf:border-t-0 print:border-gray-800 pdf:border-gray-800 print:rounded-none pdf:rounded-none rounded-lg bg-white overflow-hidden shadow-sm print:shadow-none pdf:shadow-none">
                     <SignatureCanvas 
                       ref={sigCanvas}
                       penColor="black"
                       clearOnResize={false}
-                      canvasProps={{className: 'w-full h-24 sm:h-32 print:h-16 bg-white'}}
+                      canvasProps={{className: 'w-full h-24 sm:h-32 print:h-16 pdf:h-16 bg-white'}}
                       onEnd={() => setSignature(sigCanvas.current?.toDataURL() || '')}
                     />
                   </div>
@@ -753,54 +758,54 @@ export default function App() {
                     type="date"
                     value={date}
                     onChange={(e) => setDate(e.target.value)}
-                    className="block w-full border-0 border-b-2 border-gray-200 print:border-gray-800 focus:border-indigo-600 focus:ring-0 px-0 py-2 print:py-0 text-base sm:text-lg print:text-sm transition-colors bg-transparent"
+                    className="block w-full border-0 border-b-2 border-gray-200 print:border-gray-800 pdf:border-gray-800 focus:border-indigo-600 focus:ring-0 px-0 py-2 print:py-0 pdf:py-0 text-base sm:text-lg print:text-sm pdf:text-sm transition-colors bg-transparent"
                   />
                 </div>
               </div>
               
-              <div className="w-full md:w-1/3 print:w-1/3 bg-gray-50 print:bg-transparent p-4 sm:p-6 print:p-0 rounded-xl border border-gray-200 print:border-none">
-                <div className="flex justify-between items-center mb-4 print:mb-2">
-                  <span className="text-base sm:text-lg print:text-sm font-medium text-gray-700">Hourly Rate:</span>
+              <div className="w-full md:w-1/3 print:w-1/3 pdf:w-1/3 bg-gray-50 print:bg-transparent pdf:bg-transparent p-4 sm:p-6 print:p-0 pdf:p-0 rounded-xl border border-gray-200 print:border-none pdf:border-none">
+                <div className="flex justify-between items-center mb-4 print:mb-2 pdf:mb-2">
+                  <span className="text-base sm:text-lg print:text-sm pdf:text-sm font-medium text-gray-700">Hourly Rate:</span>
                   <div className="relative">
-                    <span className="absolute left-0 top-1/2 -translate-y-1/2 text-gray-500 font-bold print:text-sm">$</span>
+                    <span className="absolute left-0 top-1/2 -translate-y-1/2 text-gray-500 font-bold print:text-sm pdf:text-sm">$</span>
                     <input
                       type="number"
                       value={hourlyRate}
                       onChange={(e) => setHourlyRate(e.target.value)}
-                      className="w-24 sm:w-32 print:w-24 text-right text-lg sm:text-xl print:text-sm font-bold text-gray-800 bg-transparent border-b-2 border-gray-300 print:border-gray-800 focus:border-indigo-600 focus:ring-0 px-0 py-1 print:py-0 pl-4"
+                      className="w-24 sm:w-32 print:w-24 pdf:w-24 text-right text-lg sm:text-xl print:text-sm pdf:text-sm font-bold text-gray-800 bg-transparent border-b-2 border-gray-300 print:border-gray-800 pdf:border-gray-800 focus:border-indigo-600 focus:ring-0 px-0 py-1 print:py-0 pdf:py-0 pl-4"
                       placeholder="0.00"
                       min="0"
                       step="0.01"
                     />
                   </div>
                 </div>
-                <div className="flex justify-between items-center mb-4 print:mb-2">
-                  <span className="text-base sm:text-lg print:text-sm font-medium text-gray-700">Total Hours:</span>
+                <div className="flex justify-between items-center mb-4 print:mb-2 pdf:mb-2">
+                  <span className="text-base sm:text-lg print:text-sm pdf:text-sm font-medium text-gray-700">Total Hours:</span>
                   <input
                     type="text"
                     value={totalHours}
                     onChange={(e) => setTotalHours(e.target.value)}
-                    className={`w-24 sm:w-32 print:w-24 text-right text-xl sm:text-2xl print:text-base font-bold text-indigo-600 print:text-gray-900 bg-transparent border-b-2 focus:ring-0 px-0 py-1 print:py-0 ${totalHours && isNaN(Number(totalHours)) ? 'border-red-500 focus:border-red-500' : 'border-indigo-200 print:border-gray-800 focus:border-indigo-600'}`}
+                    className={`w-24 sm:w-32 print:w-24 pdf:w-24 text-right text-xl sm:text-2xl print:text-base pdf:text-base font-bold text-indigo-600 print:text-gray-900 pdf:text-gray-900 bg-transparent border-b-2 focus:ring-0 px-0 py-1 print:py-0 pdf:py-0 ${totalHours && isNaN(Number(totalHours)) ? 'border-red-500 focus:border-red-500' : 'border-indigo-200 print:border-gray-800 pdf:border-gray-800 focus:border-indigo-600'}`}
                     placeholder="0.00"
                   />
                   {totalHours && isNaN(Number(totalHours)) && (
-                    <div className="text-red-500 text-xs mt-1 text-right print:hidden">Invalid number</div>
+                    <div className="text-red-500 text-xs mt-1 text-right print:hidden pdf:hidden">Invalid number</div>
                   )}
                 </div>
                 
                 {hourlyRate && !isNaN(Number(hourlyRate)) && totalWeeklyHoursNum > 0 && (
-                  <div className="mt-4 pt-4 border-t border-gray-200 print:border-gray-800 space-y-2 print:space-y-1">
-                    <div className="flex justify-between items-center text-sm print:text-xs text-gray-600 print:text-gray-800">
+                  <div className="mt-4 pt-4 border-t border-gray-200 print:border-gray-800 pdf:border-gray-800 space-y-2 print:space-y-1 pdf:space-y-1">
+                    <div className="flex justify-between items-center text-sm print:text-xs pdf:text-xs text-gray-600 print:text-gray-800 pdf:text-gray-800">
                       <span>Regular ({regularHours.toFixed(2)}h):</span>
                       <span>${regularPay.toFixed(2)}</span>
                     </div>
                     {overtimeHours > 0 && (
-                      <div className="flex justify-between items-center text-sm print:text-xs text-amber-600 print:text-gray-800 font-medium">
+                      <div className="flex justify-between items-center text-sm print:text-xs pdf:text-xs text-amber-600 print:text-gray-800 pdf:text-gray-800 font-medium">
                         <span>Overtime ({overtimeHours.toFixed(2)}h @ 1.5x):</span>
                         <span>${overtimePay.toFixed(2)}</span>
                       </div>
                     )}
-                    <div className="flex justify-between items-center text-lg print:text-base font-bold text-gray-900 pt-2 border-t border-gray-200 print:border-gray-800">
+                    <div className="flex justify-between items-center text-lg print:text-base pdf:text-base font-bold text-gray-900 pt-2 border-t border-gray-200 print:border-gray-800 pdf:border-gray-800">
                       <span>Total Pay:</span>
                       <span>${totalPay.toFixed(2)}</span>
                     </div>

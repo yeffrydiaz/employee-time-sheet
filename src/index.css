@@ -1,5 +1,11 @@
 @import "tailwindcss";
 
+@variant pdf {
+  :where(.pdf-mode, .pdf-mode *) & {
+    @slot;
+  }
+}
+
 @theme {
   --color-black: #000000;
   --color-white: #ffffff;
