@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Mail, Printer, Calculator, RefreshCw, Save, Loader2, History, Search, X, ChevronRight, Trash2, CheckCircle2 } from 'lucide-react';
+import { Mail, Printer, Calculator, RefreshCw, Save, Loader2, History, Search, X, ChevronRight, Trash2, CheckCircle2, ChevronDown } from 'lucide-react';
 import SignatureCanvas from 'react-signature-canvas';
 import { motion, AnimatePresence } from 'motion/react';
 import jsPDF from 'jspdf';
@@ -64,6 +64,15 @@ export default function App() {
   const [showClearConfirm, setShowClearConfirm] = useState(false);
   const [showEmailConfirm, setShowEmailConfirm] = useState(false);
   const [showSavedIndicator, setShowSavedIndicator] = useState(false);
+  const [emailHistory, setEmailHistory] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem('email_history');
+      return saved ? JSON.parse(saved) : [];
+    } catch (e) {
+      return [];
+    }
+  });
+  const [showEmailHistory, setShowEmailHistory] = useState(false);
 
   const sigCanvas = useRef<SignatureCanvas>(null);
 
@@ -290,6 +299,12 @@ export default function App() {
         // 2. Open Email Client
         const subject = encodeURIComponent(`Time Sheet: ${name || 'Employee'} - Week of ${weekOf || 'Unknown'}`);
         
+        // Add to email history
+        const currentEmails = recipientEmail.split(',').map(e => e.trim()).filter(Boolean);
+        const newHistory = [...new Set([...currentEmails, ...emailHistory])].slice(0, 20); // Keep last 20
+        setEmailHistory(newHistory);
+        localStorage.setItem('email_history', JSON.stringify(newHistory));
+
         let bodyText = `Employee Time Sheet\n`;
         bodyText += `===================\n\n`;
         bodyText += `Name: ${name}\n`;
@@ -488,14 +503,55 @@ export default function App() {
                 Print
               </button>
             </div>
-            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
-              <input
-                type="email"
-                placeholder="Manager's Email"
-                value={recipientEmail}
-                onChange={(e) => setRecipientEmail(e.target.value)}
-                className="px-0 py-0.5 text-xl font-bold border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 w-full sm:w-56"
-              />
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 relative">
+              <div className="relative w-full sm:w-64">
+                <input
+                  type="text"
+                  placeholder="Manager's Email(s)"
+                  value={recipientEmail}
+                  onChange={(e) => setRecipientEmail(e.target.value)}
+                  onFocus={() => setShowEmailHistory(true)}
+                  onBlur={() => setTimeout(() => setShowEmailHistory(false), 200)}
+                  className="px-2 py-1 text-base sm:text-lg font-bold border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 w-full pr-8"
+                />
+                <button 
+                  onClick={() => setShowEmailHistory(!showEmailHistory)}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                >
+                  <ChevronDown className="w-5 h-5" />
+                </button>
+                
+                {showEmailHistory && emailHistory.length > 0 && (
+                  <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-50 max-h-48 overflow-y-auto">
+                    {emailHistory.map(email => (
+                      <div 
+                        key={email}
+                        className="px-3 py-2 text-sm hover:bg-gray-50 cursor-pointer flex justify-between items-center"
+                        onClick={() => {
+                          const currentEmails = recipientEmail.split(',').map(e => e.trim()).filter(Boolean);
+                          if (!currentEmails.includes(email)) {
+                            setRecipientEmail(currentEmails.length > 0 ? `${recipientEmail}, ${email}` : email);
+                          }
+                          setShowEmailHistory(false);
+                        }}
+                      >
+                        <span className="truncate">{email}</span>
+                        <button 
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const newHistory = emailHistory.filter(e => e !== email);
+                            setEmailHistory(newHistory);
+                            localStorage.setItem('email_history', JSON.stringify(newHistory));
+                          }}
+                          className="text-gray-400 hover:text-red-500 ml-2"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
               <button
                 onClick={handleSendEmailClick}
                 disabled={isSending}
