@@ -623,7 +623,14 @@ export default function App() {
                       />
                     </div>
                     <div>
-                      <label className="block text-xs font-medium text-gray-500 mb-1">Time In</label>
+                      <div className="flex justify-between items-center mb-1">
+                        <label className="block text-xs font-medium text-gray-500">Time In</label>
+                        {record.timeIn && (
+                          <button onClick={() => handleRecordChange(index, 'timeIn', '')} className="text-gray-400 hover:text-gray-600 p-0.5" title="Clear">
+                            <X className="w-3 h-3" />
+                          </button>
+                        )}
+                      </div>
                       <input
                         type="time"
                         value={record.timeIn}
@@ -633,7 +640,14 @@ export default function App() {
                       {errors.timeIn && <p className="text-[10px] text-red-500 mt-1">{errors.timeIn}</p>}
                     </div>
                     <div>
-                      <label className="block text-xs font-medium text-gray-500 mb-1">Time Out</label>
+                      <div className="flex justify-between items-center mb-1">
+                        <label className="block text-xs font-medium text-gray-500">Time Out</label>
+                        {record.timeOut && (
+                          <button onClick={() => handleRecordChange(index, 'timeOut', '')} className="text-gray-400 hover:text-gray-600 p-0.5" title="Clear">
+                            <X className="w-3 h-3" />
+                          </button>
+                        )}
+                      </div>
                       <input
                         type="time"
                         value={record.timeOut}
@@ -643,7 +657,14 @@ export default function App() {
                       {errors.timeOut && <p className="text-[10px] text-red-500 mt-1">{errors.timeOut}</p>}
                     </div>
                     <div>
-                      <label className="block text-xs font-medium text-gray-500 mb-1">Lunch Start</label>
+                      <div className="flex justify-between items-center mb-1">
+                        <label className="block text-xs font-medium text-gray-500">Lunch Start</label>
+                        {record.lunchStart && (
+                          <button onClick={() => handleRecordChange(index, 'lunchStart', '')} className="text-gray-400 hover:text-gray-600 p-0.5" title="Clear">
+                            <X className="w-3 h-3" />
+                          </button>
+                        )}
+                      </div>
                       <input
                         type="time"
                         value={record.lunchStart}
@@ -653,7 +674,14 @@ export default function App() {
                       {errors.lunchStart && <p className="text-[10px] text-red-500 mt-1">{errors.lunchStart}</p>}
                     </div>
                     <div>
-                      <label className="block text-xs font-medium text-gray-500 mb-1">Lunch End</label>
+                      <div className="flex justify-between items-center mb-1">
+                        <label className="block text-xs font-medium text-gray-500">Lunch End</label>
+                        {record.lunchEnd && (
+                          <button onClick={() => handleRecordChange(index, 'lunchEnd', '')} className="text-gray-400 hover:text-gray-600 p-0.5" title="Clear">
+                            <X className="w-3 h-3" />
+                          </button>
+                        )}
+                      </div>
                       <input
                         type="time"
                         value={record.lunchEnd}
@@ -708,7 +736,7 @@ export default function App() {
                   {records.map((record, index) => {
                     const errors = getErrors(record);
                     return (
-                    <tr key={record.day} className="hover:bg-gray-100 transition-colors">
+                    <tr key={record.day} className="hover:bg-gray-100 transition-colors group">
                       <td className="px-2 py-2 print:px-1 pdf:px-1 print:py-1 pdf:py-1 align-top bg-gray-50 print:bg-transparent pdf:bg-transparent">
                         <div className="text-sm print:text-[10px] pdf:text-[10px] font-medium text-gray-900 mb-1 ml-1 print:mb-0 pdf:mb-0 print:ml-0 pdf:ml-0">{record.day}</div>
                         <input
@@ -719,7 +747,13 @@ export default function App() {
                         />
                       </td>
                       <td className="px-2 py-2 print:px-1 pdf:px-1 print:py-1 pdf:py-1 align-top">
-                        <div className="h-6 print:hidden pdf:hidden"></div>
+                        <div className="h-6 print:hidden pdf:hidden flex justify-end items-center">
+                          {record.timeIn && (
+                            <button onClick={() => handleRecordChange(index, 'timeIn', '')} className="text-gray-400 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity focus:opacity-100" title="Clear">
+                              <X className="w-3 h-3" />
+                            </button>
+                          )}
+                        </div>
                         <input
                           type="time"
                           value={record.timeIn}
@@ -729,7 +763,13 @@ export default function App() {
                         {errors.timeIn && <div className="text-[10px] text-red-500 mt-1 print:hidden pdf:hidden">{errors.timeIn}</div>}
                       </td>
                       <td className="px-2 py-2 print:px-1 pdf:px-1 print:py-1 pdf:py-1 align-top">
-                        <div className="h-6 print:hidden pdf:hidden"></div>
+                        <div className="h-6 print:hidden pdf:hidden flex justify-end items-center">
+                          {record.lunchStart && (
+                            <button onClick={() => handleRecordChange(index, 'lunchStart', '')} className="text-gray-400 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity focus:opacity-100" title="Clear">
+                              <X className="w-3 h-3" />
+                            </button>
+                          )}
+                        </div>
                         <input
                           type="time"
                           value={record.lunchStart}
@@ -739,7 +779,13 @@ export default function App() {
                         {errors.lunchStart && <div className="text-[10px] text-red-500 mt-1 print:hidden pdf:hidden">{errors.lunchStart}</div>}
                       </td>
                       <td className="px-2 py-2 print:px-1 pdf:px-1 print:py-1 pdf:py-1 align-top">
-                        <div className="h-6 print:hidden pdf:hidden"></div>
+                        <div className="h-6 print:hidden pdf:hidden flex justify-end items-center">
+                          {record.lunchEnd && (
+                            <button onClick={() => handleRecordChange(index, 'lunchEnd', '')} className="text-gray-400 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity focus:opacity-100" title="Clear">
+                              <X className="w-3 h-3" />
+                            </button>
+                          )}
+                        </div>
                         <input
                           type="time"
                           value={record.lunchEnd}
@@ -749,7 +795,13 @@ export default function App() {
                         {errors.lunchEnd && <div className="text-[10px] text-red-500 mt-1 print:hidden pdf:hidden">{errors.lunchEnd}</div>}
                       </td>
                       <td className="px-2 py-2 print:px-1 pdf:px-1 print:py-1 pdf:py-1 align-top">
-                        <div className="h-6 print:hidden pdf:hidden"></div>
+                        <div className="h-6 print:hidden pdf:hidden flex justify-end items-center">
+                          {record.timeOut && (
+                            <button onClick={() => handleRecordChange(index, 'timeOut', '')} className="text-gray-400 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity focus:opacity-100" title="Clear">
+                              <X className="w-3 h-3" />
+                            </button>
+                          )}
+                        </div>
                         <input
                           type="time"
                           value={record.timeOut}
