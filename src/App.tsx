@@ -54,6 +54,7 @@ export default function App() {
   const [signature, setSignature] = useState(savedData?.signature || '');
   const [date, setDate] = useState(savedData?.date || '');
   const [recipientEmail, setRecipientEmail] = useState(savedData?.recipientEmail || DEFAULT_EMAIL);
+  const [sentLogs, setSentLogs] = useState<{date: string, recipient: string}[]>(savedData?.sentLogs || []);
   const [lastSaved, setLastSaved] = useState<Date | null>(null);
   const [isSending, setIsSending] = useState(false);
   
@@ -85,7 +86,7 @@ export default function App() {
 
   // Save to local storage whenever data changes
   useEffect(() => {
-    const dataToSave = { companyName, name, weekOf, records, signature, date, recipientEmail, hourlyRate };
+    const dataToSave = { companyName, name, weekOf, records, signature, date, recipientEmail, hourlyRate, sentLogs };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(dataToSave));
     setLastSaved(new Date());
     
@@ -107,7 +108,7 @@ export default function App() {
     }
     
     return () => clearTimeout(timer);
-  }, [companyName, name, weekOf, records, signature, date, recipientEmail, hourlyRate]);
+  }, [companyName, name, weekOf, records, signature, date, recipientEmail, hourlyRate, sentLogs]);
 
   // Auto-calculate total hours when records change
   useEffect(() => {
@@ -128,6 +129,11 @@ export default function App() {
     
     setTotalHours(weeklyTotal > 0 ? weeklyTotal.toFixed(2) : '');
   }, [records]);
+
+  // Update document title for printing
+  useEffect(() => {
+    document.title = `Timesheet_${name || 'Employee'}_${weekOf || 'Week'}`.replace(/\s+/g, '_');
+  }, [name, weekOf]);
 
   const calculateRowHours = (record: DailyRecord) => {
     if (!record.timeIn || !record.timeOut) return record.totalHours; // Keep manual entry if times are missing
@@ -251,6 +257,42 @@ export default function App() {
     setShowEmailConfirm(true);
   };
 
+  const generatePDF = async () => {
+    const contentElement = document.getElementById('timesheet-content');
+    if (!contentElement) return null;
+
+    // Temporarily hide elements we don't want in the PDF
+    const elementsToHide = contentElement.querySelectorAll('.print\\:hidden, .pdf\\:hidden');
+    elementsToHide.forEach(el => (el as HTMLElement).style.display = 'none');
+    
+    // Add pdf-mode class to trigger print-like styles
+    contentElement.classList.add('pdf-mode');
+    
+    const canvas = await html2canvas(contentElement, {
+      scale: 2,
+      useCORS: true,
+      logging: false,
+      windowWidth: 800 // Force a specific width to ensure consistent layout
+    });
+    
+    // Restore hidden elements and remove pdf-mode
+    contentElement.classList.remove('pdf-mode');
+    elementsToHide.forEach(el => (el as HTMLElement).style.display = '');
+
+    const imgData = canvas.toDataURL('image/png');
+    const pdf = new jsPDF({
+      orientation: 'portrait',
+      unit: 'mm',
+      format: 'a4'
+    });
+    
+    const pdfWidth = pdf.internal.pageSize.getWidth();
+    const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
+    
+    pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
+    return pdf;
+  };
+
   const confirmSendEmail = async () => {
     setShowEmailConfirm(false);
     setIsSending(true);
@@ -259,38 +301,8 @@ export default function App() {
     setTimeout(async () => {
       try {
         // 1. Generate PDF
-        const contentElement = document.getElementById('timesheet-content');
-        if (contentElement) {
-          // Temporarily hide elements we don't want in the PDF
-          const elementsToHide = contentElement.querySelectorAll('.print\\:hidden, .pdf\\:hidden');
-          elementsToHide.forEach(el => (el as HTMLElement).style.display = 'none');
-          
-          // Add pdf-mode class to trigger print-like styles
-          contentElement.classList.add('pdf-mode');
-          
-          const canvas = await html2canvas(contentElement, {
-            scale: 2,
-            useCORS: true,
-            logging: false,
-            windowWidth: 800 // Force a specific width to ensure consistent layout
-          });
-          
-          // Restore hidden elements and remove pdf-mode
-          contentElement.classList.remove('pdf-mode');
-          elementsToHide.forEach(el => (el as HTMLElement).style.display = '');
-
-          const imgData = canvas.toDataURL('image/png');
-          const pdf = new jsPDF({
-            orientation: 'portrait',
-            unit: 'mm',
-            format: 'a4'
-          });
-          
-          const pdfWidth = pdf.internal.pageSize.getWidth();
-          const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
-          
-          pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
-          
+        const pdf = await generatePDF();
+        if (pdf) {
           // Download the PDF
           const fileName = `Timesheet_${name || 'Employee'}_${weekOf || 'Week'}.pdf`.replace(/\s+/g, '_');
           pdf.save(fileName);
@@ -352,6 +364,9 @@ export default function App() {
         const body = encodeURIComponent(bodyText);
         window.location.href = `mailto:${recipientEmail}?subject=${subject}&body=${body}`;
         
+        // Record the sent email
+        setSentLogs(prev => [...prev, { date: new Date().toISOString(), recipient: recipientEmail }]);
+        
       } catch (error) {
         console.error('Error generating PDF or sending email:', error);
         alert('There was an error generating the PDF. Please try again.');
@@ -361,8 +376,33 @@ export default function App() {
     }, 100);
   };
 
-  const handlePrint = () => {
-    window.print();
+  const handlePrint = async () => {
+    setIsSending(true);
+    const printWindow = window.open('', '_blank');
+    if (printWindow) {
+      printWindow.document.write('Generating PDF for printing... Please wait.');
+    }
+    
+    try {
+      const pdf = await generatePDF();
+      if (pdf) {
+        pdf.autoPrint();
+        const url = URL.createObjectURL(pdf.output('blob'));
+        if (printWindow) {
+          printWindow.location.href = url;
+        } else {
+          // Fallback if popup blocked
+          const fileName = `Timesheet_${name || 'Employee'}_${weekOf || 'Week'}.pdf`.replace(/\s+/g, '_');
+          pdf.save(fileName);
+        }
+      }
+    } catch (error) {
+      console.error('Error generating PDF for print:', error);
+      if (printWindow) printWindow.close();
+      alert('There was an error generating the print view. Please try again.');
+    } finally {
+      setIsSending(false);
+    }
   };
 
   const handleClear = () => {
@@ -379,6 +419,7 @@ export default function App() {
     sigCanvas.current?.clear();
     setDate('');
     setRecipientEmail(DEFAULT_EMAIL);
+    setSentLogs([]);
     setShowClearConfirm(false);
   };
 
@@ -401,6 +442,7 @@ export default function App() {
       setSignature(data.signature || '');
       setDate(data.date || '');
       setRecipientEmail(data.recipientEmail || DEFAULT_EMAIL);
+      setSentLogs(data.sentLogs || []);
       setIsHistoryOpen(false);
       
       // Update signature canvas
@@ -457,7 +499,7 @@ export default function App() {
       <div id="timesheet-content" className="max-w-5xl print:max-w-full pdf:max-w-full mx-auto space-y-4 sm:space-y-6">
         
         {/* Header Actions - Hidden when printing */}
-        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-white p-4 rounded-xl shadow-sm border border-gray-100 print:hidden pdf:hidden">
+        <div className="flex flex-col md:flex-row justify-between items-start gap-4 bg-white p-4 rounded-xl shadow-sm border border-gray-100 print:hidden pdf:hidden">
           <div className="flex items-center gap-3 text-indigo-600">
             <div className="bg-indigo-100 p-2 rounded-lg">
               <Calculator className="w-6 h-6" />
@@ -473,38 +515,42 @@ export default function App() {
               <h1 className="text-xl font-semibold text-gray-900 leading-tight">Time Sheet Manager</h1>
             </div>
           </div>
-          <div className="flex flex-col sm:flex-row w-full md:w-auto items-stretch sm:items-center gap-3">
-            {lastSaved && (
-              <div className="text-xs text-gray-400 flex items-center justify-center sm:justify-start gap-1 sm:mr-2">
-                <Save className="w-3 h-3" />
-                Last saved {lastSaved.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+          
+          <div className="flex flex-col w-full md:w-auto items-stretch md:items-end gap-3">
+            <div className="flex flex-col sm:flex-row items-center justify-between md:justify-end gap-3 w-full">
+              {lastSaved && (
+                <div className="text-xs text-gray-400 flex items-center gap-1">
+                  <Save className="w-3 h-3" />
+                  Last saved {lastSaved.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                </div>
+              )}
+              <div className="flex flex-wrap justify-end gap-2 w-full sm:w-auto">
+                <button
+                  onClick={openHistory}
+                  className="flex-1 sm:flex-none flex justify-center items-center gap-2 px-3 py-1.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+                >
+                  <History className="w-4 h-4" />
+                  History
+                </button>
+                <button
+                  onClick={handleClear}
+                  className="flex-1 sm:flex-none flex justify-center items-center gap-2 px-3 py-1.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+                >
+                  <RefreshCw className="w-4 h-4" />
+                  Clear
+                </button>
+                <button
+                  onClick={handlePrint}
+                  className="flex-1 sm:flex-none flex justify-center items-center gap-2 px-3 py-1.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+                >
+                  <Printer className="w-4 h-4" />
+                  Print
+                </button>
               </div>
-            )}
-            <div className="flex flex-wrap gap-2 w-full sm:w-auto">
-              <button
-                onClick={openHistory}
-                className="flex-1 sm:flex-none flex justify-center items-center gap-2 px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
-              >
-                <History className="w-4 h-4" />
-                History
-              </button>
-              <button
-                onClick={handleClear}
-                className="flex-1 sm:flex-none flex justify-center items-center gap-2 px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
-              >
-                <RefreshCw className="w-4 h-4" />
-                Clear
-              </button>
-              <button
-                onClick={handlePrint}
-                className="flex-1 sm:flex-none flex justify-center items-center gap-2 px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
-              >
-                <Printer className="w-4 h-4" />
-                Print
-              </button>
             </div>
-            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 relative">
-              <div className="relative w-full sm:w-64">
+            
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full md:w-auto">
+              <div className="relative w-full sm:w-72">
                 <input
                   type="text"
                   placeholder="Manager's Email(s)"
@@ -512,13 +558,13 @@ export default function App() {
                   onChange={(e) => setRecipientEmail(e.target.value)}
                   onFocus={() => setShowEmailHistory(true)}
                   onBlur={() => setTimeout(() => setShowEmailHistory(false), 200)}
-                  className="px-2 py-1 text-base sm:text-lg font-bold border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 w-full pr-8"
+                  className="px-3 py-2 text-sm sm:text-base border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 w-full pr-8"
                 />
                 <button 
                   onClick={() => setShowEmailHistory(!showEmailHistory)}
                   className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
                 >
-                  <ChevronDown className="w-5 h-5" />
+                  <ChevronDown className="w-4 h-4" />
                 </button>
                 
                 {showEmailHistory && emailHistory.length > 0 && (
@@ -570,6 +616,13 @@ export default function App() {
                 )}
               </button>
             </div>
+            
+            {sentLogs.length > 0 && (
+              <div className="text-xs text-gray-500 flex items-center justify-end gap-1 mt-1">
+                <CheckCircle2 className="w-3 h-3 text-emerald-500" />
+                Last sent: {new Date(sentLogs[sentLogs.length - 1].date).toLocaleString()} to {sentLogs[sentLogs.length - 1].recipient}
+              </div>
+            )}
           </div>
         </div>
 
@@ -1023,13 +1076,19 @@ export default function App() {
                               </span>
                             )}
                           </div>
-                          <div className="text-sm text-gray-500 flex items-center gap-4">
+                          <div className="text-sm text-gray-500 flex flex-wrap items-center gap-x-4 gap-y-1">
                             <span>{data.records?.filter((r: any) => r.totalHours).length || 0} days logged</span>
                             <span>Total: {data.records?.reduce((acc: number, r: any) => acc + (parseFloat(r.totalHours) || 0), 0).toFixed(2) || '0.00'} hrs</span>
                             {data.lastModified && (
                               <span className="hidden sm:inline">Last edited: {new Date(data.lastModified).toLocaleDateString()}</span>
                             )}
                           </div>
+                          {data.sentLogs && data.sentLogs.length > 0 && (
+                            <div className="text-xs text-emerald-600 mt-1 flex items-center gap-1">
+                              <CheckCircle2 className="w-3 h-3" />
+                              Sent {data.sentLogs.length} time{data.sentLogs.length !== 1 ? 's' : ''} (Last: {new Date(data.sentLogs[data.sentLogs.length - 1].date).toLocaleDateString()})
+                            </div>
+                          )}
                         </div>
                         <div className="flex items-center gap-2">
                           <button
