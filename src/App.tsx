@@ -265,23 +265,11 @@ export default function App() {
     const elementsToHide = contentElement.querySelectorAll('.print\\:hidden, .pdf\\:hidden');
     elementsToHide.forEach(el => (el as HTMLElement).style.display = 'none');
     
-    // Fix for html2canvas not capturing input values correctly
+    // Assign temporary IDs to all inputs so we can find their original values during clone
     const inputs = contentElement.querySelectorAll('input, textarea');
-    const originalTypes = new Map();
-    
-    inputs.forEach(input => {
-      if (input instanceof HTMLInputElement || input instanceof HTMLTextAreaElement) {
-        // Set the value attribute explicitly so html2canvas can read it
-        input.setAttribute('value', input.value);
-        if (input instanceof HTMLTextAreaElement) {
-          input.innerHTML = input.value;
-        }
-        
-        // Convert date/time inputs to text temporarily so html2canvas can render their text values
-        if (input instanceof HTMLInputElement && (input.type === 'date' || input.type === 'time')) {
-          originalTypes.set(input, input.type);
-          input.type = 'text';
-        }
+    inputs.forEach((input, index) => {
+      if (!input.id) {
+        input.id = `temp-pdf-input-${index}`;
       }
     });
 
@@ -292,14 +280,56 @@ export default function App() {
       scale: 2,
       useCORS: true,
       logging: false,
-      windowWidth: 800 // Force a specific width to ensure consistent layout
+      windowWidth: 800, // Force a specific width to ensure consistent layout
+      onclone: (clonedDoc) => {
+        const clonedInputs = clonedDoc.querySelectorAll('input, textarea');
+        clonedInputs.forEach((clonedInput) => {
+          const originalInput = document.getElementById(clonedInput.id) as HTMLInputElement | HTMLTextAreaElement;
+          if (originalInput) {
+            // Create a text node to replace the input
+            const textNode = clonedDoc.createElement('div');
+            
+            // Format the value slightly if it's a date or time for better readability
+            let displayValue = originalInput.value || '';
+            if (originalInput.type === 'date' && displayValue) {
+              // Keep it as is, or format it. We'll just use the raw value as it's usually YYYY-MM-DD
+            }
+            
+            textNode.textContent = displayValue;
+            
+            // Copy essential styles
+            const computedStyle = window.getComputedStyle(originalInput);
+            textNode.style.fontFamily = computedStyle.fontFamily;
+            textNode.style.fontSize = computedStyle.fontSize;
+            textNode.style.fontWeight = computedStyle.fontWeight;
+            textNode.style.color = computedStyle.color;
+            textNode.style.textAlign = computedStyle.textAlign;
+            textNode.style.display = 'flex';
+            textNode.style.alignItems = 'center';
+            textNode.style.justifyContent = computedStyle.textAlign === 'center' ? 'center' : (computedStyle.textAlign === 'right' ? 'flex-end' : 'flex-start');
+            textNode.style.width = computedStyle.width;
+            textNode.style.height = computedStyle.height;
+            textNode.style.padding = computedStyle.padding;
+            textNode.style.boxSizing = 'border-box';
+            textNode.style.whiteSpace = 'pre-wrap';
+            textNode.style.wordBreak = 'break-word';
+            
+            // Replace the input with the text node in the cloned document
+            clonedInput.parentNode?.replaceChild(textNode, clonedInput);
+          }
+        });
+      }
     });
     
-    // Restore hidden elements, input types, and remove pdf-mode
+    // Restore hidden elements and remove pdf-mode
     contentElement.classList.remove('pdf-mode');
     elementsToHide.forEach(el => (el as HTMLElement).style.display = '');
-    originalTypes.forEach((type, input) => {
-      input.type = type;
+    
+    // Remove temporary IDs
+    inputs.forEach((input) => {
+      if (input.id.startsWith('temp-pdf-input-')) {
+        input.removeAttribute('id');
+      }
     });
 
     const imgData = canvas.toDataURL('image/png');
