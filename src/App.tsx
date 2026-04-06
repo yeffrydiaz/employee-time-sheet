@@ -265,6 +265,26 @@ export default function App() {
     const elementsToHide = contentElement.querySelectorAll('.print\\:hidden, .pdf\\:hidden');
     elementsToHide.forEach(el => (el as HTMLElement).style.display = 'none');
     
+    // Fix for html2canvas not capturing input values correctly
+    const inputs = contentElement.querySelectorAll('input, textarea');
+    const originalTypes = new Map();
+    
+    inputs.forEach(input => {
+      if (input instanceof HTMLInputElement || input instanceof HTMLTextAreaElement) {
+        // Set the value attribute explicitly so html2canvas can read it
+        input.setAttribute('value', input.value);
+        if (input instanceof HTMLTextAreaElement) {
+          input.innerHTML = input.value;
+        }
+        
+        // Convert date/time inputs to text temporarily so html2canvas can render their text values
+        if (input instanceof HTMLInputElement && (input.type === 'date' || input.type === 'time')) {
+          originalTypes.set(input, input.type);
+          input.type = 'text';
+        }
+      }
+    });
+
     // Add pdf-mode class to trigger print-like styles
     contentElement.classList.add('pdf-mode');
     
@@ -275,9 +295,12 @@ export default function App() {
       windowWidth: 800 // Force a specific width to ensure consistent layout
     });
     
-    // Restore hidden elements and remove pdf-mode
+    // Restore hidden elements, input types, and remove pdf-mode
     contentElement.classList.remove('pdf-mode');
     elementsToHide.forEach(el => (el as HTMLElement).style.display = '');
+    originalTypes.forEach((type, input) => {
+      input.type = type;
+    });
 
     const imgData = canvas.toDataURL('image/png');
     const pdf = new jsPDF({
