@@ -339,10 +339,12 @@ export default function App() {
       format: 'a4'
     });
     
+    const margin = 15; // 15mm margin on all sides
     const pdfWidth = pdf.internal.pageSize.getWidth();
-    const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
+    const availableWidth = pdfWidth - (margin * 2);
+    const imgHeight = (canvas.height * availableWidth) / canvas.width;
     
-    pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
+    pdf.addImage(imgData, 'PNG', margin, margin, availableWidth, imgHeight);
     return pdf;
   };
 
