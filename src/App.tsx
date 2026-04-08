@@ -388,6 +388,11 @@ export default function App() {
     
     // Add pdf-mode class to trigger print-like styles
     contentElement.classList.add('pdf-mode');
+    if (isDarkMode) {
+      contentElement.classList.add('dark');
+      // Also add to children to ensure SVG rendering engine catches the class
+      Array.from(contentElement.children).forEach(child => child.classList.add('dark'));
+    }
     
     try {
       const dataUrl = await toPng(contentElement, {
@@ -395,6 +400,11 @@ export default function App() {
         pixelRatio: 2,
         // Ensure the background color matches the current theme
         backgroundColor: isDarkMode ? '#0f172a' : '#ffffff',
+        style: {
+          margin: '0',
+          width: '800px',
+          maxWidth: '800px',
+        }
       });
       
       const pdf = new jsPDF({
@@ -418,6 +428,10 @@ export default function App() {
     } finally {
       // Restore hidden elements and remove pdf-mode
       contentElement.classList.remove('pdf-mode');
+      if (isDarkMode) {
+        contentElement.classList.remove('dark');
+        Array.from(contentElement.children).forEach(child => child.classList.remove('dark'));
+      }
       elementsToHide.forEach(el => (el as HTMLElement).style.display = '');
     }
   };
