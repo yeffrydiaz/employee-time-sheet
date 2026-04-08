@@ -11,6 +11,10 @@ const firebaseConfig = {
   messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
 };
 
+if (!firebaseConfig.apiKey) {
+  console.error("FIREBASE CONFIG MISSING: The VITE_FIREBASE_API_KEY environment variable is undefined. If you are on Vercel, ensure you added the Environment Variables and unchecked 'Use existing Build Cache' when redeploying.");
+}
+
 const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
 export const db = getFirestore(app, import.meta.env.VITE_FIREBASE_DATABASE_ID);
