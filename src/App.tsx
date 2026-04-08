@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Mail, Printer, Calculator, RefreshCw, Save, Loader2, History, Search, X, ChevronRight, Trash2, CheckCircle2, ChevronDown } from 'lucide-react';
+import { Mail, Printer, Calculator, RefreshCw, Save, Loader2, History, Search, X, ChevronRight, Trash2, CheckCircle2, ChevronDown, User, LogOut } from 'lucide-react';
 import SignatureCanvas from 'react-signature-canvas';
 import { motion, AnimatePresence } from 'motion/react';
 import jsPDF from 'jspdf';
@@ -75,7 +75,119 @@ export default function App() {
   });
   const [showEmailHistory, setShowEmailHistory] = useState(false);
 
+  // Auth states
+  const [user, setUser] = useState<{id: number, email: string} | null>(null);
+  const [token, setToken] = useState<string | null>(localStorage.getItem('auth_token'));
+  const [showAuthModal, setShowAuthModal] = useState(false);
+  const [authEmail, setAuthEmail] = useState('');
+  const [authError, setAuthError] = useState('');
+  const [isAuthenticating, setIsAuthenticating] = useState(false);
+  const [magicLinkSent, setMagicLinkSent] = useState(false);
+  const [devLink, setDevLink] = useState('');
+
   const sigCanvas = useRef<SignatureCanvas>(null);
+
+  // Check for auth token in URL (from magic link redirect)
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const urlToken = params.get('auth_token');
+    if (urlToken) {
+      localStorage.setItem('auth_token', urlToken);
+      setToken(urlToken);
+      // Clean up URL
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
+  }, []);
+
+  // Fetch user profile and sync data
+  useEffect(() => {
+    if (token) {
+      fetch('/api/auth/me', {
+        headers: { 'Authorization': `Bearer ${token}` }
+      })
+      .then(res => res.json())
+      .then(data => {
+        if (data.user) {
+          setUser(data.user);
+          syncDataToCloud(token);
+        } else {
+          handleLogout();
+        }
+      })
+      .catch(() => {
+        handleLogout();
+      });
+    }
+  }, [token]);
+
+  const syncDataToCloud = async (authToken: string) => {
+    try {
+      const historyStr = localStorage.getItem(HISTORY_STORAGE_KEY) || '{}';
+      const history = JSON.parse(historyStr);
+      
+      // Sync local to cloud
+      await fetch('/api/timesheets/sync', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${authToken}`
+        },
+        body: JSON.stringify({ history })
+      });
+      
+      // Fetch latest from cloud
+      const res = await fetch('/api/timesheets', {
+        headers: { 'Authorization': `Bearer ${authToken}` }
+      });
+      const data = await res.json();
+      if (data.history) {
+        localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(data.history));
+        setHistoryData(data.history);
+      }
+    } catch (e) {
+      console.error('Sync failed', e);
+    }
+  };
+
+  const handleAuth = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsAuthenticating(true);
+    setAuthError('');
+    
+    try {
+      const res = await fetch(`/api/auth/magic-link`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: authEmail })
+      });
+      
+      const data = await res.json();
+      
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to send magic link');
+      }
+      
+      setMagicLinkSent(true);
+      if (data.devLink) {
+        setDevLink(data.devLink);
+      }
+    } catch (err: any) {
+      setAuthError(err.message);
+    } finally {
+      setIsAuthenticating(false);
+    }
+  };
+
+  const handleLogout = () => {
+    setToken(null);
+    setUser(null);
+    localStorage.removeItem('auth_token');
+  };
+
+  const getCurrentTime = () => {
+    const now = new Date();
+    return now.toTimeString().slice(0, 5);
+  };
 
   // Load signature into canvas on mount if it's a data URL
   useEffect(() => {
@@ -102,6 +214,18 @@ export default function App() {
         const history = JSON.parse(historyStr);
         history[weekOf] = { ...dataToSave, lastModified: new Date().toISOString() };
         localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(history));
+        
+        // Sync to cloud if logged in
+        if (token) {
+          fetch('/api/timesheets', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${token}`
+            },
+            body: JSON.stringify({ weekOf, data: history[weekOf] })
+          }).catch(e => console.error('Failed to save to cloud', e));
+        }
       } catch (e) {
         console.error('Failed to save to history', e);
       }
@@ -520,6 +644,13 @@ export default function App() {
       delete history[week];
       localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(history));
       setHistoryData(history);
+      
+      if (token) {
+        fetch(`/api/timesheets/${week}`, {
+          method: 'DELETE',
+          headers: { 'Authorization': `Bearer ${token}` }
+        }).catch(err => console.error('Failed to delete from cloud', err));
+      }
     } catch (err) {
       console.error('Failed to delete history item', err);
     }
@@ -580,6 +711,23 @@ export default function App() {
                 </div>
               )}
               <div className="flex flex-wrap justify-end gap-2 w-full sm:w-auto">
+                {user ? (
+                  <button
+                    onClick={handleLogout}
+                    className="flex-1 sm:flex-none flex justify-center items-center gap-2 px-3 py-1.5 text-sm font-medium text-red-700 bg-red-50 border border-red-200 rounded-lg hover:bg-red-100 transition-colors"
+                  >
+                    <LogOut className="w-4 h-4" />
+                    Logout
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => setShowAuthModal(true)}
+                    className="flex-1 sm:flex-none flex justify-center items-center gap-2 px-3 py-1.5 text-sm font-medium text-indigo-700 bg-indigo-50 border border-indigo-200 rounded-lg hover:bg-indigo-100 transition-colors"
+                  >
+                    <User className="w-4 h-4" />
+                    Login / Sign Up
+                  </button>
+                )}
                 <button
                   onClick={openHistory}
                   className="flex-1 sm:flex-none flex justify-center items-center gap-2 px-3 py-1.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
@@ -714,112 +862,140 @@ export default function App() {
             </div>
 
             {/* Mobile Cards View (Hidden on Desktop & Print) */}
-            <div className="block md:hidden print:hidden pdf:hidden space-y-6 mb-8">
+            <div className="block md:hidden print:hidden pdf:hidden space-y-4 mb-8">
               {records.map((record, index) => {
                 const errors = getErrors(record);
                 return (
-                <div key={record.day} className="bg-gray-50 p-4 rounded-xl border border-gray-200 shadow-sm space-y-4">
-                  <h3 className="font-bold text-lg text-gray-900 border-b border-gray-200 pb-2">{record.day}</h3>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                    <div className="col-span-1 sm:col-span-2">
-                      <label className="block text-xs font-medium text-gray-500 mb-1">Date</label>
-                      <input
-                        type="date"
-                        value={record.date}
-                        onChange={(e) => handleRecordChange(index, 'date', e.target.value)}
-                        className="w-full border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 text-xl font-bold py-0.5 px-0 bg-white"
-                      />
-                    </div>
-                    <div>
-                      <div className="flex justify-between items-center mb-1">
-                        <label className="block text-xs font-medium text-gray-500">Time In</label>
-                        {record.timeIn && (
-                          <button onClick={() => handleRecordChange(index, 'timeIn', '')} className="text-gray-400 hover:text-gray-600 p-0.5" title="Clear">
-                            <X className="w-3 h-3" />
-                          </button>
-                        )}
+                <div key={record.day} className="bg-white p-3.5 rounded-xl border border-gray-200 shadow-sm flex flex-col gap-3">
+                  {/* Header: Day and Date */}
+                  <div className="flex justify-between items-center border-b border-gray-100 pb-2">
+                    <h3 className="font-semibold text-gray-900">{record.day}</h3>
+                    <input
+                      type="date"
+                      value={record.date}
+                      onChange={(e) => handleRecordChange(index, 'date', e.target.value)}
+                      className="text-sm border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 py-1 px-2 bg-gray-50 w-36"
+                    />
+                  </div>
+                  
+                  {/* Times Grid */}
+                  <div className="grid grid-cols-2 gap-x-3 gap-y-2">
+                    {/* Time In */}
+                    <div className="flex flex-col">
+                      <div className="flex justify-between items-center mb-0.5">
+                        <label className="text-[10px] font-medium text-gray-500 uppercase tracking-wider">In</label>
+                        <div className="flex items-center gap-1">
+                          {!record.timeIn && (
+                            <button onClick={() => handleRecordChange(index, 'timeIn', getCurrentTime())} className="text-[9px] font-medium text-indigo-600 hover:text-indigo-800 uppercase bg-indigo-50 px-1 py-0.5 rounded">Now</button>
+                          )}
+                          {record.timeIn && (
+                            <button onClick={() => handleRecordChange(index, 'timeIn', '')} className="text-gray-400 hover:text-gray-600">
+                              <X className="w-3 h-3" />
+                            </button>
+                          )}
+                        </div>
                       </div>
                       <input
                         type="time"
                         value={record.timeIn}
                         onChange={(e) => handleRecordChange(index, 'timeIn', e.target.value)}
-                        className={`w-full rounded-md shadow-sm text-xl font-bold py-0.5 px-0 bg-white ${errors.timeIn ? 'border-red-500 focus:ring-red-500 focus:border-red-500' : 'border-gray-300 focus:ring-indigo-500 focus:border-indigo-500'}`}
+                        className={`text-sm rounded-md shadow-sm py-1.5 px-2 bg-gray-50 ${errors.timeIn ? 'border-red-500 focus:ring-red-500' : 'border-gray-300 focus:ring-indigo-500'}`}
                       />
-                      {errors.timeIn && <p className="text-[10px] text-red-500 mt-1">{errors.timeIn}</p>}
+                      {errors.timeIn && <p className="text-[10px] text-red-500 mt-0.5">{errors.timeIn}</p>}
                     </div>
-                    <div>
-                      <div className="flex justify-between items-center mb-1">
-                        <label className="block text-xs font-medium text-gray-500">Time Out</label>
-                        {record.timeOut && (
-                          <button onClick={() => handleRecordChange(index, 'timeOut', '')} className="text-gray-400 hover:text-gray-600 p-0.5" title="Clear">
-                            <X className="w-3 h-3" />
-                          </button>
-                        )}
+                    {/* Time Out */}
+                    <div className="flex flex-col">
+                      <div className="flex justify-between items-center mb-0.5">
+                        <label className="text-[10px] font-medium text-gray-500 uppercase tracking-wider">Out</label>
+                        <div className="flex items-center gap-1">
+                          {!record.timeOut && (
+                            <button onClick={() => handleRecordChange(index, 'timeOut', getCurrentTime())} className="text-[9px] font-medium text-indigo-600 hover:text-indigo-800 uppercase bg-indigo-50 px-1 py-0.5 rounded">Now</button>
+                          )}
+                          {record.timeOut && (
+                            <button onClick={() => handleRecordChange(index, 'timeOut', '')} className="text-gray-400 hover:text-gray-600">
+                              <X className="w-3 h-3" />
+                            </button>
+                          )}
+                        </div>
                       </div>
                       <input
                         type="time"
                         value={record.timeOut}
                         onChange={(e) => handleRecordChange(index, 'timeOut', e.target.value)}
-                        className={`w-full rounded-md shadow-sm text-xl font-bold py-0.5 px-0 bg-white ${errors.timeOut ? 'border-red-500 focus:ring-red-500 focus:border-red-500' : 'border-gray-300 focus:ring-indigo-500 focus:border-indigo-500'}`}
+                        className={`text-sm rounded-md shadow-sm py-1.5 px-2 bg-gray-50 ${errors.timeOut ? 'border-red-500 focus:ring-red-500' : 'border-gray-300 focus:ring-indigo-500'}`}
                       />
-                      {errors.timeOut && <p className="text-[10px] text-red-500 mt-1">{errors.timeOut}</p>}
+                      {errors.timeOut && <p className="text-[10px] text-red-500 mt-0.5">{errors.timeOut}</p>}
                     </div>
-                    <div>
-                      <div className="flex justify-between items-center mb-1">
-                        <label className="block text-xs font-medium text-gray-500">Lunch Start</label>
-                        {record.lunchStart && (
-                          <button onClick={() => handleRecordChange(index, 'lunchStart', '')} className="text-gray-400 hover:text-gray-600 p-0.5" title="Clear">
-                            <X className="w-3 h-3" />
-                          </button>
-                        )}
+                    {/* Lunch Start */}
+                    <div className="flex flex-col">
+                      <div className="flex justify-between items-center mb-0.5">
+                        <label className="text-[10px] font-medium text-gray-500 uppercase tracking-wider">Lunch Start</label>
+                        <div className="flex items-center gap-1">
+                          {!record.lunchStart && (
+                            <button onClick={() => handleRecordChange(index, 'lunchStart', getCurrentTime())} className="text-[9px] font-medium text-indigo-600 hover:text-indigo-800 uppercase bg-indigo-50 px-1 py-0.5 rounded">Now</button>
+                          )}
+                          {record.lunchStart && (
+                            <button onClick={() => handleRecordChange(index, 'lunchStart', '')} className="text-gray-400 hover:text-gray-600">
+                              <X className="w-3 h-3" />
+                            </button>
+                          )}
+                        </div>
                       </div>
                       <input
                         type="time"
                         value={record.lunchStart}
                         onChange={(e) => handleRecordChange(index, 'lunchStart', e.target.value)}
-                        className={`w-full rounded-md shadow-sm text-xl font-bold py-0.5 px-0 bg-white ${errors.lunchStart ? 'border-red-500 focus:ring-red-500 focus:border-red-500' : 'border-gray-300 focus:ring-indigo-500 focus:border-indigo-500'}`}
+                        className={`text-sm rounded-md shadow-sm py-1.5 px-2 bg-gray-50 ${errors.lunchStart ? 'border-red-500 focus:ring-red-500' : 'border-gray-300 focus:ring-indigo-500'}`}
                       />
-                      {errors.lunchStart && <p className="text-[10px] text-red-500 mt-1">{errors.lunchStart}</p>}
+                      {errors.lunchStart && <p className="text-[10px] text-red-500 mt-0.5">{errors.lunchStart}</p>}
                     </div>
-                    <div>
-                      <div className="flex justify-between items-center mb-1">
-                        <label className="block text-xs font-medium text-gray-500">Lunch End</label>
-                        {record.lunchEnd && (
-                          <button onClick={() => handleRecordChange(index, 'lunchEnd', '')} className="text-gray-400 hover:text-gray-600 p-0.5" title="Clear">
-                            <X className="w-3 h-3" />
-                          </button>
-                        )}
+                    {/* Lunch End */}
+                    <div className="flex flex-col">
+                      <div className="flex justify-between items-center mb-0.5">
+                        <label className="text-[10px] font-medium text-gray-500 uppercase tracking-wider">Lunch End</label>
+                        <div className="flex items-center gap-1">
+                          {!record.lunchEnd && (
+                            <button onClick={() => handleRecordChange(index, 'lunchEnd', getCurrentTime())} className="text-[9px] font-medium text-indigo-600 hover:text-indigo-800 uppercase bg-indigo-50 px-1 py-0.5 rounded">Now</button>
+                          )}
+                          {record.lunchEnd && (
+                            <button onClick={() => handleRecordChange(index, 'lunchEnd', '')} className="text-gray-400 hover:text-gray-600">
+                              <X className="w-3 h-3" />
+                            </button>
+                          )}
+                        </div>
                       </div>
                       <input
                         type="time"
                         value={record.lunchEnd}
                         onChange={(e) => handleRecordChange(index, 'lunchEnd', e.target.value)}
-                        className={`w-full rounded-md shadow-sm text-xl font-bold py-0.5 px-0 bg-white ${errors.lunchEnd ? 'border-red-500 focus:ring-red-500 focus:border-red-500' : 'border-gray-300 focus:ring-indigo-500 focus:border-indigo-500'}`}
+                        className={`text-sm rounded-md shadow-sm py-1.5 px-2 bg-gray-50 ${errors.lunchEnd ? 'border-red-500 focus:ring-red-500' : 'border-gray-300 focus:ring-indigo-500'}`}
                       />
-                      {errors.lunchEnd && <p className="text-[10px] text-red-500 mt-1">{errors.lunchEnd}</p>}
+                      {errors.lunchEnd && <p className="text-[10px] text-red-500 mt-0.5">{errors.lunchEnd}</p>}
                     </div>
-                    <div className="col-span-1 sm:col-span-2 flex flex-col sm:flex-row gap-2">
-                      <div className="w-full sm:w-fit">
-                        <label className="block text-xs font-medium text-gray-500 mb-1">Total Hrs</label>
-                        <input
-                          type="text"
-                          value={record.totalHours}
-                          onChange={(e) => handleRecordChange(index, 'totalHours', e.target.value)}
-                          className={`w-full sm:w-16 text-center rounded-md shadow-sm text-xl font-bold py-0.5 px-0 font-mono bg-gray-100 ${errors.totalHours ? 'border-red-500 focus:ring-red-500 focus:border-red-500' : 'border-gray-300 focus:ring-indigo-500 focus:border-indigo-500'}`}
-                          placeholder="0.00"
-                        />
-                        {errors.totalHours && <p className="text-[10px] text-red-500 mt-1">{errors.totalHours}</p>}
-                      </div>
-                      <div className="flex-1">
-                        <label className="block text-xs font-medium text-gray-500 mb-1">Notes</label>
-                        <input
-                          type="text"
-                          value={record.notes}
-                          onChange={(e) => handleRecordChange(index, 'notes', e.target.value)}
-                          className="w-full border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 text-xl font-bold py-0.5 px-0 bg-white"
-                          placeholder="..."
-                        />
-                      </div>
+                  </div>
+                  
+                  {/* Footer: Total Hrs & Notes */}
+                  <div className="flex gap-3 pt-1">
+                    <div className="w-20 flex flex-col">
+                      <label className="text-[10px] font-medium text-gray-500 uppercase tracking-wider mb-0.5">Total Hrs</label>
+                      <input
+                        type="text"
+                        value={record.totalHours}
+                        onChange={(e) => handleRecordChange(index, 'totalHours', e.target.value)}
+                        className={`w-full text-center text-sm font-bold rounded-md shadow-sm py-1.5 px-1 bg-indigo-50 text-indigo-700 ${errors.totalHours ? 'border-red-500 focus:ring-red-500' : 'border-indigo-200 focus:ring-indigo-500'}`}
+                        placeholder="0.00"
+                      />
+                      {errors.totalHours && <p className="text-[10px] text-red-500 mt-0.5">{errors.totalHours}</p>}
+                    </div>
+                    <div className="flex-1 flex flex-col">
+                      <label className="text-[10px] font-medium text-gray-500 uppercase tracking-wider mb-0.5">Notes</label>
+                      <input
+                        type="text"
+                        value={record.notes}
+                        onChange={(e) => handleRecordChange(index, 'notes', e.target.value)}
+                        className="w-full text-sm rounded-md shadow-sm border-gray-300 focus:ring-indigo-500 focus:border-indigo-500 py-1.5 px-2 bg-gray-50"
+                        placeholder="Add notes..."
+                      />
                     </div>
                   </div>
                 </div>
@@ -855,9 +1031,12 @@ export default function App() {
                         />
                       </td>
                       <td className="px-2 py-2 print:px-1 pdf:px-1 print:py-1 pdf:py-1 align-top">
-                        <div className="h-6 print:hidden pdf:hidden flex justify-end items-center">
+                        <div className="h-6 print:hidden pdf:hidden flex justify-end items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity focus-within:opacity-100">
+                          {!record.timeIn && (
+                            <button onClick={() => handleRecordChange(index, 'timeIn', getCurrentTime())} className="text-[9px] font-medium text-indigo-600 hover:text-indigo-800 uppercase tracking-wider bg-indigo-50 px-1 py-0.5 rounded" title="Set to current time">Now</button>
+                          )}
                           {record.timeIn && (
-                            <button onClick={() => handleRecordChange(index, 'timeIn', '')} className="text-gray-400 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity focus:opacity-100" title="Clear">
+                            <button onClick={() => handleRecordChange(index, 'timeIn', '')} className="text-gray-400 hover:text-red-500" title="Clear">
                               <X className="w-3 h-3" />
                             </button>
                           )}
@@ -871,9 +1050,12 @@ export default function App() {
                         {errors.timeIn && <div className="text-[10px] text-red-500 mt-1 print:hidden pdf:hidden">{errors.timeIn}</div>}
                       </td>
                       <td className="px-2 py-2 print:px-1 pdf:px-1 print:py-1 pdf:py-1 align-top">
-                        <div className="h-6 print:hidden pdf:hidden flex justify-end items-center">
+                        <div className="h-6 print:hidden pdf:hidden flex justify-end items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity focus-within:opacity-100">
+                          {!record.lunchStart && (
+                            <button onClick={() => handleRecordChange(index, 'lunchStart', getCurrentTime())} className="text-[9px] font-medium text-indigo-600 hover:text-indigo-800 uppercase tracking-wider bg-indigo-50 px-1 py-0.5 rounded" title="Set to current time">Now</button>
+                          )}
                           {record.lunchStart && (
-                            <button onClick={() => handleRecordChange(index, 'lunchStart', '')} className="text-gray-400 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity focus:opacity-100" title="Clear">
+                            <button onClick={() => handleRecordChange(index, 'lunchStart', '')} className="text-gray-400 hover:text-red-500" title="Clear">
                               <X className="w-3 h-3" />
                             </button>
                           )}
@@ -887,9 +1069,12 @@ export default function App() {
                         {errors.lunchStart && <div className="text-[10px] text-red-500 mt-1 print:hidden pdf:hidden">{errors.lunchStart}</div>}
                       </td>
                       <td className="px-2 py-2 print:px-1 pdf:px-1 print:py-1 pdf:py-1 align-top">
-                        <div className="h-6 print:hidden pdf:hidden flex justify-end items-center">
+                        <div className="h-6 print:hidden pdf:hidden flex justify-end items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity focus-within:opacity-100">
+                          {!record.lunchEnd && (
+                            <button onClick={() => handleRecordChange(index, 'lunchEnd', getCurrentTime())} className="text-[9px] font-medium text-indigo-600 hover:text-indigo-800 uppercase tracking-wider bg-indigo-50 px-1 py-0.5 rounded" title="Set to current time">Now</button>
+                          )}
                           {record.lunchEnd && (
-                            <button onClick={() => handleRecordChange(index, 'lunchEnd', '')} className="text-gray-400 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity focus:opacity-100" title="Clear">
+                            <button onClick={() => handleRecordChange(index, 'lunchEnd', '')} className="text-gray-400 hover:text-red-500" title="Clear">
                               <X className="w-3 h-3" />
                             </button>
                           )}
@@ -903,9 +1088,12 @@ export default function App() {
                         {errors.lunchEnd && <div className="text-[10px] text-red-500 mt-1 print:hidden pdf:hidden">{errors.lunchEnd}</div>}
                       </td>
                       <td className="px-2 py-2 print:px-1 pdf:px-1 print:py-1 pdf:py-1 align-top">
-                        <div className="h-6 print:hidden pdf:hidden flex justify-end items-center">
+                        <div className="h-6 print:hidden pdf:hidden flex justify-end items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity focus-within:opacity-100">
+                          {!record.timeOut && (
+                            <button onClick={() => handleRecordChange(index, 'timeOut', getCurrentTime())} className="text-[9px] font-medium text-indigo-600 hover:text-indigo-800 uppercase tracking-wider bg-indigo-50 px-1 py-0.5 rounded" title="Set to current time">Now</button>
+                          )}
                           {record.timeOut && (
-                            <button onClick={() => handleRecordChange(index, 'timeOut', '')} className="text-gray-400 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity focus:opacity-100" title="Clear">
+                            <button onClick={() => handleRecordChange(index, 'timeOut', '')} className="text-gray-400 hover:text-red-500" title="Clear">
                               <X className="w-3 h-3" />
                             </button>
                           )}
@@ -1160,6 +1348,76 @@ export default function App() {
                   </div>
                 )}
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* Auth Modal */}
+        {showAuthModal && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-xl shadow-xl max-w-sm w-full p-6">
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="text-lg font-semibold text-gray-900">
+                  Sign In / Register
+                </h3>
+                <button onClick={() => { setShowAuthModal(false); setMagicLinkSent(false); }} className="text-gray-400 hover:text-gray-600">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+              
+              {!magicLinkSent ? (
+                <form onSubmit={handleAuth} className="space-y-4">
+                  {authError && (
+                    <div className="p-3 text-sm text-red-600 bg-red-50 rounded-lg border border-red-100">
+                      {authError}
+                    </div>
+                  )}
+                  
+                  <p className="text-sm text-gray-600">
+                    Enter your email and we'll send you a magic link to sign in instantly. No password needed.
+                  </p>
+                  
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
+                    <input
+                      type="email"
+                      required
+                      value={authEmail}
+                      onChange={(e) => setAuthEmail(e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                      placeholder="you@example.com"
+                    />
+                  </div>
+                  
+                  <button
+                    type="submit"
+                    disabled={isAuthenticating}
+                    className="w-full flex justify-center items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-70"
+                  >
+                    {isAuthenticating ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+                    Send Magic Link
+                  </button>
+                </form>
+              ) : (
+                <div className="text-center space-y-4 py-4">
+                  <div className="mx-auto w-12 h-12 bg-emerald-100 rounded-full flex items-center justify-center">
+                    <Mail className="w-6 h-6 text-emerald-600" />
+                  </div>
+                  <h4 className="text-lg font-medium text-gray-900">Check your email</h4>
+                  <p className="text-sm text-gray-600">
+                    We've sent a magic link to <strong>{authEmail}</strong>. Click the link to sign in.
+                  </p>
+                  
+                  {devLink && (
+                    <div className="mt-6 p-4 bg-gray-50 rounded-lg border border-gray-200 text-left">
+                      <p className="text-xs text-gray-500 font-semibold uppercase tracking-wider mb-2">Development Mode</p>
+                      <a href={devLink} className="text-sm text-indigo-600 hover:text-indigo-800 break-all underline">
+                        {devLink}
+                      </a>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         )}
