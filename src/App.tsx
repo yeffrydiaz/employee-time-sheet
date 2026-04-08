@@ -3,7 +3,7 @@ import { Mail, Printer, Calculator, RefreshCw, Save, Loader2, History, Search, X
 import SignatureCanvas from 'react-signature-canvas';
 import { motion, AnimatePresence } from 'motion/react';
 import jsPDF from 'jspdf';
-import html2canvas from 'html2canvas';
+import { toPng } from 'html-to-image';
 import { auth, db, googleProvider } from './firebase';
 import { signInWithPopup, signOut, onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
 import { collection, doc, setDoc, getDocs, deleteDoc, serverTimestamp, query, where, onSnapshot } from 'firebase/firestore';
@@ -386,87 +386,40 @@ export default function App() {
     const elementsToHide = contentElement.querySelectorAll('.print\\:hidden, .pdf\\:hidden');
     elementsToHide.forEach(el => (el as HTMLElement).style.display = 'none');
     
-    // Assign temporary IDs to all inputs so we can find their original values during clone
-    const inputs = contentElement.querySelectorAll('input, textarea');
-    inputs.forEach((input, index) => {
-      if (!input.id) {
-        input.id = `temp-pdf-input-${index}`;
-      }
-    });
-
     // Add pdf-mode class to trigger print-like styles
     contentElement.classList.add('pdf-mode');
     
-    const canvas = await html2canvas(contentElement, {
-      scale: 2,
-      useCORS: true,
-      logging: false,
-      windowWidth: 800, // Force a specific width to ensure consistent layout
-      onclone: (clonedDoc) => {
-        const clonedInputs = clonedDoc.querySelectorAll('input, textarea');
-        clonedInputs.forEach((clonedInput) => {
-          const originalInput = document.getElementById(clonedInput.id) as HTMLInputElement | HTMLTextAreaElement;
-          if (originalInput) {
-            // Create a text node to replace the input
-            const textNode = clonedDoc.createElement('div');
-            
-            // Format the value slightly if it's a date or time for better readability
-            let displayValue = originalInput.value || '';
-            if (originalInput.type === 'date' && displayValue) {
-              // Keep it as is, or format it. We'll just use the raw value as it's usually YYYY-MM-DD
-            }
-            
-            textNode.textContent = displayValue;
-            
-            // Copy essential styles
-            const computedStyle = window.getComputedStyle(originalInput);
-            textNode.style.fontFamily = computedStyle.fontFamily;
-            textNode.style.fontSize = computedStyle.fontSize;
-            textNode.style.fontWeight = computedStyle.fontWeight;
-            textNode.style.color = computedStyle.color;
-            textNode.style.textAlign = computedStyle.textAlign;
-            textNode.style.display = 'flex';
-            textNode.style.alignItems = 'center';
-            textNode.style.justifyContent = computedStyle.textAlign === 'center' ? 'center' : (computedStyle.textAlign === 'right' ? 'flex-end' : 'flex-start');
-            textNode.style.width = computedStyle.width;
-            textNode.style.height = computedStyle.height;
-            textNode.style.padding = computedStyle.padding;
-            textNode.style.boxSizing = 'border-box';
-            textNode.style.whiteSpace = 'pre-wrap';
-            textNode.style.wordBreak = 'break-word';
-            
-            // Replace the input with the text node in the cloned document
-            clonedInput.parentNode?.replaceChild(textNode, clonedInput);
-          }
-        });
-      }
-    });
-    
-    // Restore hidden elements and remove pdf-mode
-    contentElement.classList.remove('pdf-mode');
-    elementsToHide.forEach(el => (el as HTMLElement).style.display = '');
-    
-    // Remove temporary IDs
-    inputs.forEach((input) => {
-      if (input.id.startsWith('temp-pdf-input-')) {
-        input.removeAttribute('id');
-      }
-    });
-
-    const imgData = canvas.toDataURL('image/png');
-    const pdf = new jsPDF({
-      orientation: 'portrait',
-      unit: 'mm',
-      format: 'a4'
-    });
-    
-    const margin = 15; // 15mm margin on all sides
-    const pdfWidth = pdf.internal.pageSize.getWidth();
-    const availableWidth = pdfWidth - (margin * 2);
-    const imgHeight = (canvas.height * availableWidth) / canvas.width;
-    
-    pdf.addImage(imgData, 'PNG', margin, margin, availableWidth, imgHeight);
-    return pdf;
+    try {
+      const dataUrl = await toPng(contentElement, {
+        quality: 1.0,
+        pixelRatio: 2,
+        // Ensure the background color matches the current theme
+        backgroundColor: isDarkMode ? '#0f172a' : '#ffffff',
+      });
+      
+      const pdf = new jsPDF({
+        orientation: 'portrait',
+        unit: 'mm',
+        format: 'a4'
+      });
+      
+      const margin = 15; // 15mm margin on all sides
+      const pdfWidth = pdf.internal.pageSize.getWidth();
+      const availableWidth = pdfWidth - (margin * 2);
+      
+      const imgProps = pdf.getImageProperties(dataUrl);
+      const imgHeight = (imgProps.height * availableWidth) / imgProps.width;
+      
+      pdf.addImage(dataUrl, 'PNG', margin, margin, availableWidth, imgHeight);
+      return pdf;
+    } catch (error) {
+      console.error('Error generating PDF:', error);
+      return null;
+    } finally {
+      // Restore hidden elements and remove pdf-mode
+      contentElement.classList.remove('pdf-mode');
+      elementsToHide.forEach(el => (el as HTMLElement).style.display = '');
+    }
   };
 
   const confirmSendEmail = async () => {
