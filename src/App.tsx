@@ -80,6 +80,7 @@ export default function App() {
   const [sentLogs, setSentLogs] = useState<{date: string, recipient: string}[]>(savedData?.sentLogs || []);
   const [lastSaved, setLastSaved] = useState<Date | null>(null);
   const [isSending, setIsSending] = useState(false);
+  const [isGeneratingPDF, setIsGeneratingPDF] = useState(false);
   
   // History and Modal states
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
@@ -393,6 +394,9 @@ export default function App() {
       // Also add to children to ensure SVG rendering engine catches the class
       Array.from(contentElement.children).forEach(child => child.classList.add('dark'));
     }
+    
+    // Wait for browser to recalculate layout
+    await new Promise(resolve => setTimeout(resolve, 100));
     
     try {
       const dataUrl = await toPng(contentElement, {
