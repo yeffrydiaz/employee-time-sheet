@@ -208,11 +208,18 @@ export default function App() {
         body: JSON.stringify({ email: authEmail })
       });
       
-      const data = await res.json();
-      
       if (!res.ok) {
-        throw new Error(data.error || 'Failed to send magic link');
+        const text = await res.text();
+        console.error('Magic link error response:', text);
+        try {
+          const data = JSON.parse(text);
+          throw new Error(data.error || 'Failed to send magic link');
+        } catch (e) {
+          throw new Error(`Server error: ${res.status} ${res.statusText}`);
+        }
       }
+      
+      const data = await res.json();
       
       setMagicLinkSent(true);
       if (data.devLink) {
