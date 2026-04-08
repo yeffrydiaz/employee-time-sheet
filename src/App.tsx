@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Mail, Printer, Calculator, RefreshCw, Save, Loader2, History, Search, X, ChevronRight, Trash2, CheckCircle2, ChevronDown, User, LogOut } from 'lucide-react';
+import { Mail, Printer, Calculator, RefreshCw, Save, Loader2, History, Search, X, ChevronRight, Trash2, CheckCircle2, ChevronDown, User, LogOut, Moon, Sun, Clock } from 'lucide-react';
 import SignatureCanvas from 'react-signature-canvas';
 import { motion, AnimatePresence } from 'motion/react';
 import jsPDF from 'jspdf';
@@ -26,13 +26,24 @@ const initialRecords: DailyRecord[] = [
   { day: 'Saturday', date: '', timeIn: '', lunchStart: '', lunchEnd: '', timeOut: '', totalHours: '', notes: '' },
 ];
 
-const STORAGE_KEY = 'employee_timesheet_data';
-const HISTORY_STORAGE_KEY = 'employee_timesheet_history';
+const STORAGE_KEY_PREFIX = 'employee_timesheet_data_';
+const HISTORY_STORAGE_KEY_PREFIX = 'employee_timesheet_history_';
+const LAST_COMPANY_KEY = 'last_active_company';
 const DEFAULT_EMAIL = 'TIMESHEETS@ROYAL-TRANS.COM';
 
-const loadSavedData = () => {
+const getInitialCompany = () => {
+  if (typeof window !== 'undefined') {
+    return localStorage.getItem(LAST_COMPANY_KEY) || 'Royal Transportation';
+  }
+  return 'Royal Transportation';
+};
+
+const loadSavedData = (company: string) => {
   try {
-    const saved = localStorage.getItem(STORAGE_KEY);
+    let saved = localStorage.getItem(`${STORAGE_KEY_PREFIX}${company}`);
+    if (!saved && company === 'Royal Transportation') {
+      saved = localStorage.getItem('employee_timesheet_data'); // Migration from old key
+    }
     if (saved) {
       return JSON.parse(saved);
     }
@@ -43,9 +54,18 @@ const loadSavedData = () => {
 };
 
 export default function App() {
-  const savedData = loadSavedData();
+  const initialCompany = getInitialCompany();
+  const savedData = loadSavedData(initialCompany);
   
-  const [companyName, setCompanyName] = useState(savedData?.companyName || 'Royal Transportation');
+  const [companyName, setCompanyName] = useState(initialCompany);
+  const [companies, setCompanies] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem('companies_list');
+      return saved ? JSON.parse(saved) : ['Royal Transportation'];
+    } catch (e) {
+      return ['Royal Transportation'];
+    }
+  });
   const [name, setName] = useState(savedData?.name || '');
   const [weekOf, setWeekOf] = useState(savedData?.weekOf || '');
   const [records, setRecords] = useState<DailyRecord[]>(savedData?.records || initialRecords);
@@ -65,6 +85,8 @@ export default function App() {
   const [showClearConfirm, setShowClearConfirm] = useState(false);
   const [showEmailConfirm, setShowEmailConfirm] = useState(false);
   const [showSavedIndicator, setShowSavedIndicator] = useState(false);
+  const [isCompanyDropdownOpen, setIsCompanyDropdownOpen] = useState(false);
+  const [newCompanyInput, setNewCompanyInput] = useState('');
   const [emailHistory, setEmailHistory] = useState<string[]>(() => {
     try {
       const saved = localStorage.getItem('email_history');
@@ -84,8 +106,29 @@ export default function App() {
   const [isAuthenticating, setIsAuthenticating] = useState(false);
   const [magicLinkSent, setMagicLinkSent] = useState(false);
   const [devLink, setDevLink] = useState('');
+  
+  // Dark mode state
+  const [isDarkMode, setIsDarkMode] = useState(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('theme');
+      if (saved) return saved === 'dark';
+      return window.matchMedia('(prefers-color-scheme: dark)').matches;
+    }
+    return false;
+  });
 
   const sigCanvas = useRef<SignatureCanvas>(null);
+
+  // Apply dark mode class to html element
+  useEffect(() => {
+    if (isDarkMode) {
+      document.documentElement.classList.add('dark');
+      localStorage.setItem('theme', 'dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+      localStorage.setItem('theme', 'light');
+    }
+  }, [isDarkMode]);
 
   // Check for auth token in URL (from magic link redirect)
   useEffect(() => {
@@ -122,8 +165,12 @@ export default function App() {
 
   const syncDataToCloud = async (authToken: string) => {
     try {
-      const historyStr = localStorage.getItem(HISTORY_STORAGE_KEY) || '{}';
-      const history = JSON.parse(historyStr);
+      const historyKey = `${HISTORY_STORAGE_KEY_PREFIX}${companyName}`;
+      let historyStr = localStorage.getItem(historyKey);
+      if (!historyStr && companyName === 'Royal Transportation') {
+        historyStr = localStorage.getItem('employee_timesheet_history');
+      }
+      const history = JSON.parse(historyStr || '{}');
       
       // Sync local to cloud
       await fetch('/api/timesheets/sync', {
@@ -132,16 +179,16 @@ export default function App() {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${authToken}`
         },
-        body: JSON.stringify({ history })
+        body: JSON.stringify({ history, companyName })
       });
       
       // Fetch latest from cloud
-      const res = await fetch('/api/timesheets', {
+      const res = await fetch(`/api/timesheets?company=${encodeURIComponent(companyName)}`, {
         headers: { 'Authorization': `Bearer ${authToken}` }
       });
       const data = await res.json();
       if (data.history) {
-        localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(data.history));
+        localStorage.setItem(historyKey, JSON.stringify(data.history));
         setHistoryData(data.history);
       }
     } catch (e) {
@@ -199,7 +246,7 @@ export default function App() {
   // Save to local storage whenever data changes
   useEffect(() => {
     const dataToSave = { companyName, name, weekOf, records, signature, date, recipientEmail, hourlyRate, sentLogs };
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(dataToSave));
+    localStorage.setItem(`${STORAGE_KEY_PREFIX}${companyName}`, JSON.stringify(dataToSave));
     setLastSaved(new Date());
     
     setShowSavedIndicator(true);
@@ -210,10 +257,14 @@ export default function App() {
     // Also save to history if weekOf is set
     if (weekOf) {
       try {
-        const historyStr = localStorage.getItem(HISTORY_STORAGE_KEY) || '{}';
-        const history = JSON.parse(historyStr);
+        const historyKey = `${HISTORY_STORAGE_KEY_PREFIX}${companyName}`;
+        let historyStr = localStorage.getItem(historyKey);
+        if (!historyStr && companyName === 'Royal Transportation') {
+          historyStr = localStorage.getItem('employee_timesheet_history');
+        }
+        const history = JSON.parse(historyStr || '{}');
         history[weekOf] = { ...dataToSave, lastModified: new Date().toISOString() };
-        localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(history));
+        localStorage.setItem(historyKey, JSON.stringify(history));
         
         // Sync to cloud if logged in
         if (token) {
@@ -223,7 +274,7 @@ export default function App() {
               'Content-Type': 'application/json',
               'Authorization': `Bearer ${token}`
             },
-            body: JSON.stringify({ weekOf, data: history[weekOf] })
+            body: JSON.stringify({ weekOf, data: history[weekOf], companyName })
           }).catch(e => console.error('Failed to save to cloud', e));
         }
       } catch (e) {
@@ -496,7 +547,7 @@ export default function App() {
         setEmailHistory(newHistory);
         localStorage.setItem('email_history', JSON.stringify(newHistory));
 
-        let bodyText = `Employee Time Sheet\n`;
+        let bodyText = `${companyName || 'Employee'} Time Sheet\n`;
         bodyText += `===================\n\n`;
         bodyText += `Name: ${name}\n`;
         bodyText += `Week of: ${weekOf}\n\n`;
@@ -602,10 +653,58 @@ export default function App() {
     setShowClearConfirm(false);
   };
 
+  const switchCompany = (newCompany: string) => {
+    // Save current state before switching
+    const currentData = { companyName, name, weekOf, records, signature, date, recipientEmail, hourlyRate, sentLogs };
+    localStorage.setItem(`${STORAGE_KEY_PREFIX}${companyName}`, JSON.stringify(currentData));
+
+    // Load new company data
+    const newData = loadSavedData(newCompany);
+    
+    setCompanyName(newCompany);
+    localStorage.setItem(LAST_COMPANY_KEY, newCompany);
+    
+    setName(newData?.name || '');
+    setWeekOf(newData?.weekOf || '');
+    setRecords(newData?.records || initialRecords);
+    setHourlyRate(newData?.hourlyRate || '');
+    setSignature(newData?.signature || '');
+    setDate(newData?.date || '');
+    setRecipientEmail(newData?.recipientEmail || DEFAULT_EMAIL);
+    setSentLogs(newData?.sentLogs || []);
+    
+    if (sigCanvas.current) {
+      sigCanvas.current.clear();
+      if (newData?.signature && newData.signature.startsWith('data:image')) {
+        setTimeout(() => {
+          sigCanvas.current?.fromDataURL(newData.signature);
+        }, 50);
+      }
+    }
+  };
+
+  const handleAddCompany = () => {
+    const trimmed = newCompanyInput.trim();
+    if (trimmed) {
+      if (!companies.includes(trimmed)) {
+        const newCompanies = [...companies, trimmed];
+        setCompanies(newCompanies);
+        localStorage.setItem('companies_list', JSON.stringify(newCompanies));
+      }
+      switchCompany(trimmed);
+      setNewCompanyInput('');
+      setIsCompanyDropdownOpen(false);
+    }
+  };
+
   const openHistory = () => {
     try {
-      const historyStr = localStorage.getItem(HISTORY_STORAGE_KEY) || '{}';
-      setHistoryData(JSON.parse(historyStr));
+      const historyKey = `${HISTORY_STORAGE_KEY_PREFIX}${companyName}`;
+      let historyStr = localStorage.getItem(historyKey);
+      if (!historyStr && companyName === 'Royal Transportation') {
+        historyStr = localStorage.getItem('employee_timesheet_history');
+      }
+      setHistoryData(JSON.parse(historyStr || '{}'));
     } catch (e) {
       console.error('Failed to load history', e);
     }
@@ -639,14 +738,18 @@ export default function App() {
   const deleteHistoryItem = (week: string, e: React.MouseEvent) => {
     e.stopPropagation();
     try {
-      const historyStr = localStorage.getItem(HISTORY_STORAGE_KEY) || '{}';
-      const history = JSON.parse(historyStr);
+      const historyKey = `${HISTORY_STORAGE_KEY_PREFIX}${companyName}`;
+      let historyStr = localStorage.getItem(historyKey);
+      if (!historyStr && companyName === 'Royal Transportation') {
+        historyStr = localStorage.getItem('employee_timesheet_history');
+      }
+      const history = JSON.parse(historyStr || '{}');
       delete history[week];
-      localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(history));
+      localStorage.setItem(historyKey, JSON.stringify(history));
       setHistoryData(history);
       
       if (token) {
-        fetch(`/api/timesheets/${week}`, {
+        fetch(`/api/timesheets/${week}?company=${encodeURIComponent(companyName)}`, {
           method: 'DELETE',
           headers: { 'Authorization': `Bearer ${token}` }
         }).catch(err => console.error('Failed to delete from cloud', err));
@@ -681,40 +784,41 @@ export default function App() {
   const totalPay = regularPay + overtimePay;
 
   return (
-    <div className="min-h-screen bg-gray-50 py-4 sm:py-8 px-2 sm:px-6 lg:px-8 print:bg-white pdf:bg-white print:py-0 pdf:py-0 print:px-0 pdf:px-0">
+    <div className="min-h-screen bg-gray-50 dark:bg-slate-900 py-4 sm:py-8 px-2 sm:px-6 lg:px-8 print:bg-white pdf:bg-white print:py-0 pdf:py-0 print:px-0 pdf:px-0">
       <div id="timesheet-content" className="max-w-5xl print:max-w-full pdf:max-w-full mx-auto space-y-4 sm:space-y-6">
         
         {/* Header Actions - Hidden when printing */}
-        <div className="flex flex-col md:flex-row justify-between items-start gap-4 bg-white p-4 rounded-xl shadow-sm border border-gray-100 print:hidden pdf:hidden">
-          <div className="flex items-center gap-3 text-indigo-600">
-            <div className="bg-indigo-100 p-2 rounded-lg">
-              <Calculator className="w-6 h-6" />
+        <div className="flex flex-col md:flex-row justify-between items-start gap-4 bg-white/40 dark:bg-slate-800/40 backdrop-blur-md p-4 rounded-xl shadow-sm border border-white/50 dark:border-slate-700/50 print:hidden pdf:hidden">
+          <div className="flex items-center gap-3 text-indigo-600 dark:text-indigo-400">
+            <div className="bg-indigo-100 dark:bg-indigo-900/50 p-2 rounded-lg">
+              <Clock className="w-6 h-6" />
             </div>
             <div>
-              <input
-                type="text"
-                value={companyName}
-                onChange={(e) => setCompanyName(e.target.value)}
-                className="text-sm sm:text-base font-bold text-indigo-600 uppercase tracking-wider bg-transparent border-0 border-b border-transparent hover:border-indigo-200 focus:border-indigo-600 focus:ring-0 p-0 m-0 w-full sm:w-64"
-                placeholder="Company Name"
-              />
-              <h1 className="text-xl font-semibold text-gray-900 leading-tight">Time Sheet Manager</h1>
+              <h1 className="text-xl font-semibold text-gray-900 dark:text-white leading-tight">Time Sheet Manager</h1>
             </div>
           </div>
           
           <div className="flex flex-col w-full md:w-auto items-stretch md:items-end gap-3">
             <div className="flex flex-col sm:flex-row items-center justify-between md:justify-end gap-3 w-full">
               {lastSaved && (
-                <div className="text-xs text-gray-400 flex items-center gap-1">
+                <div className="text-xs text-gray-400 dark:text-slate-500 flex items-center gap-1">
                   <Save className="w-3 h-3" />
                   Last saved {lastSaved.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                 </div>
               )}
               <div className="flex flex-wrap justify-end gap-2 w-full sm:w-auto">
+                <button
+                  onClick={() => setIsDarkMode(!isDarkMode)}
+                  className="flex-1 sm:flex-none flex justify-center items-center gap-2 px-3 py-1.5 text-sm font-medium text-gray-700 dark:text-slate-200 bg-white dark:bg-slate-800 border border-gray-300 dark:border-slate-600 rounded-lg hover:bg-gray-50 dark:hover:bg-slate-700 transition-colors"
+                  title={isDarkMode ? "Switch to Light Mode" : "Switch to Dark Mode"}
+                >
+                  {isDarkMode ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+                  <span className="sr-only sm:not-sr-only sm:inline">{isDarkMode ? 'Light' : 'Dark'}</span>
+                </button>
                 {user ? (
                   <button
                     onClick={handleLogout}
-                    className="flex-1 sm:flex-none flex justify-center items-center gap-2 px-3 py-1.5 text-sm font-medium text-red-700 bg-red-50 border border-red-200 rounded-lg hover:bg-red-100 transition-colors"
+                    className="flex-1 sm:flex-none flex justify-center items-center gap-2 px-3 py-1.5 text-sm font-medium text-red-700 dark:text-red-400 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-900/50 rounded-lg hover:bg-red-100 dark:hover:bg-red-900/40 transition-colors"
                   >
                     <LogOut className="w-4 h-4" />
                     Logout
@@ -722,7 +826,7 @@ export default function App() {
                 ) : (
                   <button
                     onClick={() => setShowAuthModal(true)}
-                    className="flex-1 sm:flex-none flex justify-center items-center gap-2 px-3 py-1.5 text-sm font-medium text-indigo-700 bg-indigo-50 border border-indigo-200 rounded-lg hover:bg-indigo-100 transition-colors"
+                    className="flex-1 sm:flex-none flex justify-center items-center gap-2 px-3 py-1.5 text-sm font-medium text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-200 dark:border-indigo-800/50 rounded-lg hover:bg-indigo-100 dark:hover:bg-indigo-900/40 transition-colors"
                   >
                     <User className="w-4 h-4" />
                     Login / Sign Up
@@ -730,21 +834,21 @@ export default function App() {
                 )}
                 <button
                   onClick={openHistory}
-                  className="flex-1 sm:flex-none flex justify-center items-center gap-2 px-3 py-1.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+                  className="flex-1 sm:flex-none flex justify-center items-center gap-2 px-3 py-1.5 text-sm font-medium text-gray-700 dark:text-slate-200 bg-white dark:bg-slate-800 border border-gray-300 dark:border-slate-600 rounded-lg hover:bg-gray-50 dark:hover:bg-slate-700 transition-colors"
                 >
                   <History className="w-4 h-4" />
                   History
                 </button>
                 <button
                   onClick={handleClear}
-                  className="flex-1 sm:flex-none flex justify-center items-center gap-2 px-3 py-1.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+                  className="flex-1 sm:flex-none flex justify-center items-center gap-2 px-3 py-1.5 text-sm font-medium text-gray-700 dark:text-slate-200 bg-white dark:bg-slate-800 border border-gray-300 dark:border-slate-600 rounded-lg hover:bg-gray-50 dark:hover:bg-slate-700 transition-colors"
                 >
                   <RefreshCw className="w-4 h-4" />
                   Clear
                 </button>
                 <button
                   onClick={handlePrint}
-                  className="flex-1 sm:flex-none flex justify-center items-center gap-2 px-3 py-1.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+                  className="flex-1 sm:flex-none flex justify-center items-center gap-2 px-3 py-1.5 text-sm font-medium text-gray-700 dark:text-slate-200 bg-white dark:bg-slate-800 border border-gray-300 dark:border-slate-600 rounded-lg hover:bg-gray-50 dark:hover:bg-slate-700 transition-colors"
                 >
                   <Printer className="w-4 h-4" />
                   Print
@@ -761,21 +865,21 @@ export default function App() {
                   onChange={(e) => setRecipientEmail(e.target.value)}
                   onFocus={() => setShowEmailHistory(true)}
                   onBlur={() => setTimeout(() => setShowEmailHistory(false), 200)}
-                  className="px-3 py-2 text-sm sm:text-base border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 w-full pr-8"
+                  className="px-3 py-2 text-sm sm:text-base border border-gray-300 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 w-full pr-8 bg-white/50 dark:bg-slate-800/50 text-gray-900 dark:text-white"
                 />
                 <button 
                   onClick={() => setShowEmailHistory(!showEmailHistory)}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 dark:text-slate-500 hover:text-gray-600 dark:hover:text-slate-300"
                 >
                   <ChevronDown className="w-4 h-4" />
                 </button>
                 
                 {showEmailHistory && emailHistory.length > 0 && (
-                  <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-50 max-h-48 overflow-y-auto">
+                  <div className="absolute top-full left-0 right-0 mt-1 bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-lg shadow-lg z-50 max-h-48 overflow-y-auto">
                     {emailHistory.map(email => (
                       <div 
                         key={email}
-                        className="px-3 py-2 text-sm hover:bg-gray-50 cursor-pointer flex justify-between items-center"
+                        className="px-3 py-2 text-sm hover:bg-gray-50 dark:hover:bg-slate-700 cursor-pointer flex justify-between items-center text-gray-900 dark:text-white"
                         onClick={() => {
                           const currentEmails = recipientEmail.split(',').map(e => e.trim()).filter(Boolean);
                           if (!currentEmails.includes(email)) {
@@ -792,7 +896,7 @@ export default function App() {
                             setEmailHistory(newHistory);
                             localStorage.setItem('email_history', JSON.stringify(newHistory));
                           }}
-                          className="text-gray-400 hover:text-red-500 ml-2"
+                          className="text-gray-400 dark:text-slate-500 hover:text-red-500 dark:hover:text-red-400 ml-2"
                         >
                           <X className="w-3 h-3" />
                         </button>
@@ -830,33 +934,86 @@ export default function App() {
         </div>
 
         {/* Main Form Document */}
-        <div className="bg-white shadow-xl rounded-2xl overflow-hidden border border-gray-200 print:shadow-none pdf:shadow-none print:border-none pdf:border-none print:rounded-none pdf:rounded-none">
+        <div className="bg-white/60 dark:bg-slate-800/60 backdrop-blur-xl shadow-xl rounded-2xl overflow-hidden border border-white/50 dark:border-slate-700/50 print:shadow-none pdf:shadow-none print:border-none pdf:border-none print:rounded-none pdf:rounded-none print:bg-white pdf:bg-white">
           <div className="p-4 sm:p-8 md:p-12 print:p-0 pdf:p-0">
             
             {/* Document Header */}
-            <div className="text-center mb-8 sm:mb-10 print:mb-4 pdf:mb-4">
-              <h2 className="text-2xl sm:text-3xl print:text-xl pdf:text-xl font-bold text-gray-900 tracking-tight">Employee Time Sheet</h2>
+            <div className="text-center mb-8 sm:mb-10 print:mb-4 pdf:mb-4 relative z-20">
+              <div className="relative inline-block text-left w-full max-w-md mx-auto">
+                <button
+                  onClick={() => setIsCompanyDropdownOpen(!isCompanyDropdownOpen)}
+                  className="text-2xl sm:text-3xl print:text-xl pdf:text-xl font-bold text-gray-900 dark:text-white tracking-tight flex items-center justify-center w-full gap-2 hover:opacity-80 transition-opacity print:pointer-events-none pdf:pointer-events-none"
+                >
+                  {companyName || 'Select Company'}
+                  <ChevronDown className="w-6 h-6 opacity-50 print:hidden pdf:hidden" />
+                </button>
+                
+                {isCompanyDropdownOpen && (
+                  <>
+                    <div 
+                      className="fixed inset-0 z-10" 
+                      onClick={() => setIsCompanyDropdownOpen(false)}
+                    />
+                    <div className="absolute left-1/2 -translate-x-1/2 mt-2 w-full max-w-sm bg-white dark:bg-slate-800 rounded-xl shadow-xl border border-gray-200 dark:border-slate-700 overflow-hidden z-20">
+                      <div className="max-h-60 overflow-y-auto py-2">
+                        {companies.map(c => (
+                          <button
+                            key={c}
+                            onClick={() => {
+                              switchCompany(c);
+                              setIsCompanyDropdownOpen(false);
+                            }}
+                            className={`w-full text-left px-4 py-2 hover:bg-gray-50 dark:hover:bg-slate-700 text-gray-900 dark:text-white font-medium flex items-center justify-between ${companyName === c ? 'bg-indigo-50 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400' : ''}`}
+                          >
+                            {c}
+                            {companyName === c && <CheckCircle2 className="w-4 h-4" />}
+                          </button>
+                        ))}
+                      </div>
+                      <div className="p-2 border-t border-gray-100 dark:border-slate-700 bg-gray-50 dark:bg-slate-800/50 flex gap-2">
+                        <input
+                          type="text"
+                          placeholder="Add new company..."
+                          value={newCompanyInput}
+                          onChange={e => setNewCompanyInput(e.target.value)}
+                          onKeyDown={e => {
+                            if (e.key === 'Enter') handleAddCompany();
+                          }}
+                          className="flex-1 px-3 py-1.5 text-sm border border-gray-300 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-indigo-500 bg-white dark:bg-slate-900 text-gray-900 dark:text-white"
+                        />
+                        <button
+                          onClick={handleAddCompany}
+                          disabled={!newCompanyInput.trim()}
+                          className="px-3 py-1.5 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          Add
+                        </button>
+                      </div>
+                    </div>
+                  </>
+                )}
+              </div>
             </div>
 
             {/* Employee Info */}
             <div className="grid grid-cols-1 md:grid-cols-2 print:grid-cols-2 pdf:grid-cols-2 gap-4 sm:gap-6 mb-8 sm:mb-10 print:mb-4 pdf:mb-4">
               <div className="space-y-1">
-                <label className="block text-sm font-medium text-gray-700">Name</label>
+                <label className="block text-sm font-medium text-gray-700 dark:text-slate-300">Name</label>
                 <input
                   type="text"
                   value={name}
                   onChange={handleNameChange}
-                  className="block w-full border-0 border-b-2 border-gray-200 focus:border-indigo-600 focus:ring-0 px-0 py-0.5 text-xl sm:text-2xl print:text-lg pdf:text-lg print:border-none pdf:border-none print:p-0 pdf:p-0 font-bold transition-colors bg-transparent"
+                  className="block w-full border-0 border-b-2 border-gray-200 dark:border-slate-700 focus:border-indigo-600 dark:focus:border-indigo-400 focus:ring-0 px-0 py-0.5 text-xl sm:text-2xl print:text-lg pdf:text-lg print:border-none pdf:border-none print:p-0 pdf:p-0 font-bold transition-colors bg-transparent text-gray-900 dark:text-white placeholder-gray-300 dark:placeholder-slate-600"
                   placeholder="John Doe"
                 />
               </div>
               <div className="space-y-1">
-                <label className="block text-sm font-medium text-gray-700">Week of</label>
+                <label className="block text-sm font-medium text-gray-700 dark:text-slate-300">Week Of</label>
                 <input
                   type="date"
                   value={weekOf}
                   onChange={handleWeekOfChange}
-                  className="block w-full border-0 border-b-2 border-gray-200 focus:border-indigo-600 focus:ring-0 px-0 py-0.5 text-xl sm:text-2xl print:text-lg pdf:text-lg print:border-none pdf:border-none print:p-0 pdf:p-0 font-bold transition-colors bg-transparent"
+                  className="block w-full border-0 border-b-2 border-gray-200 dark:border-slate-700 focus:border-indigo-600 dark:focus:border-indigo-400 focus:ring-0 px-0 py-0.5 text-xl sm:text-2xl print:text-lg pdf:text-lg print:border-none pdf:border-none print:p-0 pdf:p-0 font-bold transition-colors bg-transparent text-gray-900 dark:text-white"
                 />
               </div>
             </div>
@@ -866,15 +1023,15 @@ export default function App() {
               {records.map((record, index) => {
                 const errors = getErrors(record);
                 return (
-                <div key={record.day} className="bg-white p-3.5 rounded-xl border border-gray-200 shadow-sm flex flex-col gap-3">
+                <div key={record.day} className="bg-white/40 dark:bg-slate-800/40 backdrop-blur-md p-3.5 rounded-xl border border-white/50 dark:border-slate-700/50 shadow-sm flex flex-col gap-3">
                   {/* Header: Day and Date */}
-                  <div className="flex justify-between items-center border-b border-gray-100 pb-2">
-                    <h3 className="font-semibold text-gray-900">{record.day}</h3>
+                  <div className="flex justify-between items-center border-b border-gray-100 dark:border-slate-700/50 pb-2">
+                    <h3 className="font-semibold text-gray-900 dark:text-white">{record.day}</h3>
                     <input
                       type="date"
                       value={record.date}
                       onChange={(e) => handleRecordChange(index, 'date', e.target.value)}
-                      className="text-sm border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 py-1 px-2 bg-gray-50 w-36"
+                      className="text-sm border-gray-300 dark:border-slate-600 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 py-1 px-2 bg-white/50 dark:bg-slate-800/50 text-gray-900 dark:text-white w-36"
                     />
                   </div>
                   
@@ -883,13 +1040,13 @@ export default function App() {
                     {/* Time In */}
                     <div className="flex flex-col">
                       <div className="flex justify-between items-center mb-0.5">
-                        <label className="text-[10px] font-medium text-gray-500 uppercase tracking-wider">In</label>
+                        <label className="text-[10px] font-medium text-gray-500 dark:text-slate-400 uppercase tracking-wider">In</label>
                         <div className="flex items-center gap-1">
                           {!record.timeIn && (
-                            <button onClick={() => handleRecordChange(index, 'timeIn', getCurrentTime())} className="text-[9px] font-medium text-indigo-600 hover:text-indigo-800 uppercase bg-indigo-50 px-1 py-0.5 rounded">Now</button>
+                            <button onClick={() => handleRecordChange(index, 'timeIn', getCurrentTime())} className="text-[9px] font-medium text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-300 uppercase bg-indigo-50 dark:bg-indigo-900/30 px-1 py-0.5 rounded">Now</button>
                           )}
                           {record.timeIn && (
-                            <button onClick={() => handleRecordChange(index, 'timeIn', '')} className="text-gray-400 hover:text-gray-600">
+                            <button onClick={() => handleRecordChange(index, 'timeIn', '')} className="text-gray-400 dark:text-slate-500 hover:text-red-500 dark:hover:text-red-400">
                               <X className="w-3 h-3" />
                             </button>
                           )}
@@ -899,20 +1056,20 @@ export default function App() {
                         type="time"
                         value={record.timeIn}
                         onChange={(e) => handleRecordChange(index, 'timeIn', e.target.value)}
-                        className={`text-sm rounded-md shadow-sm py-1.5 px-2 bg-gray-50 ${errors.timeIn ? 'border-red-500 focus:ring-red-500' : 'border-gray-300 focus:ring-indigo-500'}`}
+                        className={`text-sm rounded-md shadow-sm py-1.5 px-2 bg-white/50 dark:bg-slate-800/50 text-gray-900 dark:text-white ${errors.timeIn ? 'border-red-500 focus:ring-red-500' : 'border-gray-300 dark:border-slate-600 focus:ring-indigo-500'}`}
                       />
                       {errors.timeIn && <p className="text-[10px] text-red-500 mt-0.5">{errors.timeIn}</p>}
                     </div>
                     {/* Time Out */}
                     <div className="flex flex-col">
                       <div className="flex justify-between items-center mb-0.5">
-                        <label className="text-[10px] font-medium text-gray-500 uppercase tracking-wider">Out</label>
+                        <label className="text-[10px] font-medium text-gray-500 dark:text-slate-400 uppercase tracking-wider">Out</label>
                         <div className="flex items-center gap-1">
                           {!record.timeOut && (
-                            <button onClick={() => handleRecordChange(index, 'timeOut', getCurrentTime())} className="text-[9px] font-medium text-indigo-600 hover:text-indigo-800 uppercase bg-indigo-50 px-1 py-0.5 rounded">Now</button>
+                            <button onClick={() => handleRecordChange(index, 'timeOut', getCurrentTime())} className="text-[9px] font-medium text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-300 uppercase bg-indigo-50 dark:bg-indigo-900/30 px-1 py-0.5 rounded">Now</button>
                           )}
                           {record.timeOut && (
-                            <button onClick={() => handleRecordChange(index, 'timeOut', '')} className="text-gray-400 hover:text-gray-600">
+                            <button onClick={() => handleRecordChange(index, 'timeOut', '')} className="text-gray-400 dark:text-slate-500 hover:text-red-500 dark:hover:text-red-400">
                               <X className="w-3 h-3" />
                             </button>
                           )}
@@ -922,20 +1079,20 @@ export default function App() {
                         type="time"
                         value={record.timeOut}
                         onChange={(e) => handleRecordChange(index, 'timeOut', e.target.value)}
-                        className={`text-sm rounded-md shadow-sm py-1.5 px-2 bg-gray-50 ${errors.timeOut ? 'border-red-500 focus:ring-red-500' : 'border-gray-300 focus:ring-indigo-500'}`}
+                        className={`text-sm rounded-md shadow-sm py-1.5 px-2 bg-white/50 dark:bg-slate-800/50 text-gray-900 dark:text-white ${errors.timeOut ? 'border-red-500 focus:ring-red-500' : 'border-gray-300 dark:border-slate-600 focus:ring-indigo-500'}`}
                       />
                       {errors.timeOut && <p className="text-[10px] text-red-500 mt-0.5">{errors.timeOut}</p>}
                     </div>
                     {/* Lunch Start */}
                     <div className="flex flex-col">
                       <div className="flex justify-between items-center mb-0.5">
-                        <label className="text-[10px] font-medium text-gray-500 uppercase tracking-wider">Lunch Start</label>
+                        <label className="text-[10px] font-medium text-gray-500 dark:text-slate-400 uppercase tracking-wider">Lunch Start</label>
                         <div className="flex items-center gap-1">
                           {!record.lunchStart && (
-                            <button onClick={() => handleRecordChange(index, 'lunchStart', getCurrentTime())} className="text-[9px] font-medium text-indigo-600 hover:text-indigo-800 uppercase bg-indigo-50 px-1 py-0.5 rounded">Now</button>
+                            <button onClick={() => handleRecordChange(index, 'lunchStart', getCurrentTime())} className="text-[9px] font-medium text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-300 uppercase bg-indigo-50 dark:bg-indigo-900/30 px-1 py-0.5 rounded">Now</button>
                           )}
                           {record.lunchStart && (
-                            <button onClick={() => handleRecordChange(index, 'lunchStart', '')} className="text-gray-400 hover:text-gray-600">
+                            <button onClick={() => handleRecordChange(index, 'lunchStart', '')} className="text-gray-400 dark:text-slate-500 hover:text-red-500 dark:hover:text-red-400">
                               <X className="w-3 h-3" />
                             </button>
                           )}
@@ -945,20 +1102,20 @@ export default function App() {
                         type="time"
                         value={record.lunchStart}
                         onChange={(e) => handleRecordChange(index, 'lunchStart', e.target.value)}
-                        className={`text-sm rounded-md shadow-sm py-1.5 px-2 bg-gray-50 ${errors.lunchStart ? 'border-red-500 focus:ring-red-500' : 'border-gray-300 focus:ring-indigo-500'}`}
+                        className={`text-sm rounded-md shadow-sm py-1.5 px-2 bg-white/50 dark:bg-slate-800/50 text-gray-900 dark:text-white ${errors.lunchStart ? 'border-red-500 focus:ring-red-500' : 'border-gray-300 dark:border-slate-600 focus:ring-indigo-500'}`}
                       />
                       {errors.lunchStart && <p className="text-[10px] text-red-500 mt-0.5">{errors.lunchStart}</p>}
                     </div>
                     {/* Lunch End */}
                     <div className="flex flex-col">
                       <div className="flex justify-between items-center mb-0.5">
-                        <label className="text-[10px] font-medium text-gray-500 uppercase tracking-wider">Lunch End</label>
+                        <label className="text-[10px] font-medium text-gray-500 dark:text-slate-400 uppercase tracking-wider">Lunch End</label>
                         <div className="flex items-center gap-1">
                           {!record.lunchEnd && (
-                            <button onClick={() => handleRecordChange(index, 'lunchEnd', getCurrentTime())} className="text-[9px] font-medium text-indigo-600 hover:text-indigo-800 uppercase bg-indigo-50 px-1 py-0.5 rounded">Now</button>
+                            <button onClick={() => handleRecordChange(index, 'lunchEnd', getCurrentTime())} className="text-[9px] font-medium text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-300 uppercase bg-indigo-50 dark:bg-indigo-900/30 px-1 py-0.5 rounded">Now</button>
                           )}
                           {record.lunchEnd && (
-                            <button onClick={() => handleRecordChange(index, 'lunchEnd', '')} className="text-gray-400 hover:text-gray-600">
+                            <button onClick={() => handleRecordChange(index, 'lunchEnd', '')} className="text-gray-400 dark:text-slate-500 hover:text-red-500 dark:hover:text-red-400">
                               <X className="w-3 h-3" />
                             </button>
                           )}
@@ -968,7 +1125,7 @@ export default function App() {
                         type="time"
                         value={record.lunchEnd}
                         onChange={(e) => handleRecordChange(index, 'lunchEnd', e.target.value)}
-                        className={`text-sm rounded-md shadow-sm py-1.5 px-2 bg-gray-50 ${errors.lunchEnd ? 'border-red-500 focus:ring-red-500' : 'border-gray-300 focus:ring-indigo-500'}`}
+                        className={`text-sm rounded-md shadow-sm py-1.5 px-2 bg-white/50 dark:bg-slate-800/50 text-gray-900 dark:text-white ${errors.lunchEnd ? 'border-red-500 focus:ring-red-500' : 'border-gray-300 dark:border-slate-600 focus:ring-indigo-500'}`}
                       />
                       {errors.lunchEnd && <p className="text-[10px] text-red-500 mt-0.5">{errors.lunchEnd}</p>}
                     </div>
@@ -977,23 +1134,23 @@ export default function App() {
                   {/* Footer: Total Hrs & Notes */}
                   <div className="flex gap-3 pt-1">
                     <div className="w-20 flex flex-col">
-                      <label className="text-[10px] font-medium text-gray-500 uppercase tracking-wider mb-0.5">Total Hrs</label>
+                      <label className="text-[10px] font-medium text-gray-500 dark:text-slate-400 uppercase tracking-wider mb-0.5">Total Hrs</label>
                       <input
                         type="text"
                         value={record.totalHours}
                         onChange={(e) => handleRecordChange(index, 'totalHours', e.target.value)}
-                        className={`w-full text-center text-sm font-bold rounded-md shadow-sm py-1.5 px-1 bg-indigo-50 text-indigo-700 ${errors.totalHours ? 'border-red-500 focus:ring-red-500' : 'border-indigo-200 focus:ring-indigo-500'}`}
+                        className={`w-full text-center text-sm font-bold rounded-md shadow-sm py-1.5 px-1 bg-indigo-50/50 dark:bg-indigo-900/20 text-indigo-700 dark:text-indigo-300 ${errors.totalHours ? 'border-red-500 focus:ring-red-500' : 'border-indigo-200 dark:border-indigo-800/50 focus:ring-indigo-500 dark:focus:ring-indigo-400'}`}
                         placeholder="0.00"
                       />
                       {errors.totalHours && <p className="text-[10px] text-red-500 mt-0.5">{errors.totalHours}</p>}
                     </div>
                     <div className="flex-1 flex flex-col">
-                      <label className="text-[10px] font-medium text-gray-500 uppercase tracking-wider mb-0.5">Notes</label>
+                      <label className="text-[10px] font-medium text-gray-500 dark:text-slate-400 uppercase tracking-wider mb-0.5">Notes</label>
                       <input
                         type="text"
                         value={record.notes}
                         onChange={(e) => handleRecordChange(index, 'notes', e.target.value)}
-                        className="w-full text-sm rounded-md shadow-sm border-gray-300 focus:ring-indigo-500 focus:border-indigo-500 py-1.5 px-2 bg-gray-50"
+                        className="w-full text-sm rounded-md shadow-sm border-gray-300 dark:border-slate-600 focus:ring-indigo-500 focus:border-indigo-500 py-1.5 px-2 bg-gray-50/50 dark:bg-slate-800/30 text-gray-900 dark:text-white"
                         placeholder="Add notes..."
                       />
                     </div>
@@ -1003,40 +1160,40 @@ export default function App() {
             </div>
 
             {/* Desktop Table View (Visible on Desktop & Print) */}
-            <div className="hidden md:block print:block pdf:block overflow-x-auto print:overflow-visible pdf:overflow-visible mb-10 print:mb-4 pdf:mb-4 border border-gray-200 print:border-none pdf:border-none rounded-xl print:rounded-none pdf:rounded-none">
-              <table className="min-w-full print:w-full pdf:w-full print:table-fixed pdf:table-fixed divide-y divide-gray-200 print:divide-gray-800 pdf:divide-gray-800 print:border-t pdf:border-t print:border-b pdf:border-b print:border-gray-800 pdf:border-gray-800">
-                <thead className="bg-gray-50 print:bg-transparent pdf:bg-transparent">
+            <div className="hidden md:block print:block pdf:block overflow-x-auto print:overflow-visible pdf:overflow-visible mb-10 print:mb-4 pdf:mb-4 border border-gray-200 dark:border-slate-700/50 print:border-none pdf:border-none rounded-xl print:rounded-none pdf:rounded-none bg-white/40 dark:bg-slate-800/40 backdrop-blur-md shadow-sm">
+              <table className="min-w-full print:w-full pdf:w-full print:table-fixed pdf:table-fixed divide-y divide-gray-200 dark:divide-slate-700/50 print:divide-gray-800 pdf:divide-gray-800 print:border-t pdf:border-t print:border-b pdf:border-b print:border-gray-800 pdf:border-gray-800">
+                <thead className="bg-gray-50/50 dark:bg-slate-800/50 print:bg-transparent pdf:bg-transparent">
                   <tr>
-                    <th scope="col" className="px-2 py-3 print:px-1 pdf:px-1 print:py-1 pdf:py-1 text-left text-sm print:text-[10px] pdf:text-[10px] font-semibold text-gray-600 uppercase tracking-wider w-40 print:w-[14%] pdf:w-[14%]">Date</th>
-                    <th scope="col" className="px-2 py-3 print:px-1 pdf:px-1 print:py-1 pdf:py-1 text-left text-sm print:text-[10px] pdf:text-[10px] font-semibold text-gray-600 uppercase tracking-wider w-24 print:w-[12%] pdf:w-[12%]">Time In</th>
-                    <th scope="col" className="px-2 py-3 print:px-1 pdf:px-1 print:py-1 pdf:py-1 text-left text-sm print:text-[10px] pdf:text-[10px] font-semibold text-gray-600 uppercase tracking-wider w-24 print:w-[12%] pdf:w-[12%]">Lunch Start</th>
-                    <th scope="col" className="px-2 py-3 print:px-1 pdf:px-1 print:py-1 pdf:py-1 text-left text-sm print:text-[10px] pdf:text-[10px] font-semibold text-gray-600 uppercase tracking-wider w-24 print:w-[12%] pdf:w-[12%]">Lunch End</th>
-                    <th scope="col" className="px-2 py-3 print:px-1 pdf:px-1 print:py-1 pdf:py-1 text-left text-sm print:text-[10px] pdf:text-[10px] font-semibold text-gray-600 uppercase tracking-wider w-24 print:w-[12%] pdf:w-[12%]">Time Out</th>
-                    <th scope="col" className="px-0 py-3 print:px-0 pdf:px-0 print:py-1 pdf:py-1 text-center text-sm print:text-[10px] pdf:text-[10px] font-semibold text-gray-600 uppercase tracking-wider w-20 print:w-[10%] pdf:w-[10%]">Total Hrs</th>
-                    <th scope="col" className="px-2 py-3 print:px-1 pdf:px-1 print:py-1 pdf:py-1 text-left text-sm print:text-[10px] pdf:text-[10px] font-semibold text-gray-600 uppercase tracking-wider print:w-[28%] pdf:w-[28%]">Notes</th>
+                    <th scope="col" className="px-2 py-3 print:px-1 pdf:px-1 print:py-1 pdf:py-1 text-left text-sm print:text-[10px] pdf:text-[10px] font-semibold text-gray-600 dark:text-slate-300 uppercase tracking-wider w-40 print:w-[14%] pdf:w-[14%]">Date</th>
+                    <th scope="col" className="px-2 py-3 print:px-1 pdf:px-1 print:py-1 pdf:py-1 text-left text-sm print:text-[10px] pdf:text-[10px] font-semibold text-gray-600 dark:text-slate-300 uppercase tracking-wider w-24 print:w-[12%] pdf:w-[12%]">Time In</th>
+                    <th scope="col" className="px-2 py-3 print:px-1 pdf:px-1 print:py-1 pdf:py-1 text-left text-sm print:text-[10px] pdf:text-[10px] font-semibold text-gray-600 dark:text-slate-300 uppercase tracking-wider w-24 print:w-[12%] pdf:w-[12%]">Lunch Start</th>
+                    <th scope="col" className="px-2 py-3 print:px-1 pdf:px-1 print:py-1 pdf:py-1 text-left text-sm print:text-[10px] pdf:text-[10px] font-semibold text-gray-600 dark:text-slate-300 uppercase tracking-wider w-24 print:w-[12%] pdf:w-[12%]">Lunch End</th>
+                    <th scope="col" className="px-2 py-3 print:px-1 pdf:px-1 print:py-1 pdf:py-1 text-left text-sm print:text-[10px] pdf:text-[10px] font-semibold text-gray-600 dark:text-slate-300 uppercase tracking-wider w-24 print:w-[12%] pdf:w-[12%]">Time Out</th>
+                    <th scope="col" className="px-0 py-3 print:px-0 pdf:px-0 print:py-1 pdf:py-1 text-center text-sm print:text-[10px] pdf:text-[10px] font-semibold text-gray-600 dark:text-slate-300 uppercase tracking-wider w-20 print:w-[10%] pdf:w-[10%]">Total Hrs</th>
+                    <th scope="col" className="px-2 py-3 print:px-1 pdf:px-1 print:py-1 pdf:py-1 text-left text-sm print:text-[10px] pdf:text-[10px] font-semibold text-gray-600 dark:text-slate-300 uppercase tracking-wider print:w-[28%] pdf:w-[28%]">Notes</th>
                   </tr>
                 </thead>
-                <tbody className="bg-white print:bg-transparent pdf:bg-transparent divide-y divide-gray-200 print:divide-gray-800 pdf:divide-gray-800">
+                <tbody className="divide-y divide-gray-200 dark:divide-slate-700/50 print:divide-gray-800 pdf:divide-gray-800">
                   {records.map((record, index) => {
                     const errors = getErrors(record);
                     return (
-                    <tr key={record.day} className="hover:bg-gray-100 transition-colors group">
-                      <td className="px-2 py-2 print:px-1 pdf:px-1 print:py-1 pdf:py-1 align-top bg-gray-50 print:bg-transparent pdf:bg-transparent">
-                        <div className="text-sm print:text-[10px] pdf:text-[10px] font-medium text-gray-900 mb-1 ml-1 print:mb-0 pdf:mb-0 print:ml-0 pdf:ml-0">{record.day}</div>
+                    <tr key={record.day} className="hover:bg-gray-100/50 dark:hover:bg-slate-800/50 transition-colors group">
+                      <td className="px-2 py-2 print:px-1 pdf:px-1 print:py-1 pdf:py-1 align-top bg-gray-50/50 dark:bg-slate-800/30 print:bg-transparent pdf:bg-transparent">
+                        <div className="text-sm print:text-[10px] pdf:text-[10px] font-medium text-gray-900 dark:text-white mb-1 ml-1 print:mb-0 pdf:mb-0 print:ml-0 pdf:ml-0">{record.day}</div>
                         <input
                           type="date"
                           value={record.date}
                           onChange={(e) => handleRecordChange(index, 'date', e.target.value)}
-                          className="w-full border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 text-xl print:text-[10px] pdf:text-[10px] print:border-none pdf:border-none print:bg-transparent pdf:bg-transparent print:shadow-none pdf:shadow-none print:p-0 pdf:p-0 print:min-w-0 pdf:min-w-0 font-bold py-0 px-0"
+                          className="w-full border-gray-300 dark:border-slate-600 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 text-xl print:text-[10px] pdf:text-[10px] print:border-none pdf:border-none print:bg-transparent pdf:bg-transparent print:shadow-none pdf:shadow-none print:p-0 pdf:p-0 print:min-w-0 pdf:min-w-0 font-bold py-0 px-0 bg-transparent text-gray-900 dark:text-white"
                         />
                       </td>
                       <td className="px-2 py-2 print:px-1 pdf:px-1 print:py-1 pdf:py-1 align-top">
                         <div className="h-6 print:hidden pdf:hidden flex justify-end items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity focus-within:opacity-100">
                           {!record.timeIn && (
-                            <button onClick={() => handleRecordChange(index, 'timeIn', getCurrentTime())} className="text-[9px] font-medium text-indigo-600 hover:text-indigo-800 uppercase tracking-wider bg-indigo-50 px-1 py-0.5 rounded" title="Set to current time">Now</button>
+                            <button onClick={() => handleRecordChange(index, 'timeIn', getCurrentTime())} className="text-[9px] font-medium text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-300 uppercase tracking-wider bg-indigo-50 dark:bg-indigo-900/30 px-1 py-0.5 rounded" title="Set to current time">Now</button>
                           )}
                           {record.timeIn && (
-                            <button onClick={() => handleRecordChange(index, 'timeIn', '')} className="text-gray-400 hover:text-red-500" title="Clear">
+                            <button onClick={() => handleRecordChange(index, 'timeIn', '')} className="text-gray-400 dark:text-slate-500 hover:text-red-500 dark:hover:text-red-400" title="Clear">
                               <X className="w-3 h-3" />
                             </button>
                           )}
@@ -1045,17 +1202,17 @@ export default function App() {
                           type="time"
                           value={record.timeIn}
                           onChange={(e) => handleRecordChange(index, 'timeIn', e.target.value)}
-                          className={`w-full rounded-md shadow-sm text-xl print:text-[11px] pdf:text-[11px] print:border-none pdf:border-none print:bg-transparent pdf:bg-transparent print:shadow-none pdf:shadow-none print:p-0 pdf:p-0 print:min-w-0 pdf:min-w-0 font-bold py-0 px-0 ${errors.timeIn ? 'border-red-500 focus:ring-red-500 focus:border-red-500' : 'border-gray-300 focus:ring-indigo-500 focus:border-indigo-500'}`}
+                          className={`w-full rounded-md shadow-sm text-xl print:text-[11px] pdf:text-[11px] print:border-none pdf:border-none print:bg-transparent pdf:bg-transparent print:shadow-none pdf:shadow-none print:p-0 pdf:p-0 print:min-w-0 pdf:min-w-0 font-bold py-0 px-0 bg-transparent text-gray-900 dark:text-white ${errors.timeIn ? 'border-red-500 focus:ring-red-500 focus:border-red-500' : 'border-gray-300 dark:border-slate-600 focus:ring-indigo-500 focus:border-indigo-500'}`}
                         />
                         {errors.timeIn && <div className="text-[10px] text-red-500 mt-1 print:hidden pdf:hidden">{errors.timeIn}</div>}
                       </td>
                       <td className="px-2 py-2 print:px-1 pdf:px-1 print:py-1 pdf:py-1 align-top">
                         <div className="h-6 print:hidden pdf:hidden flex justify-end items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity focus-within:opacity-100">
                           {!record.lunchStart && (
-                            <button onClick={() => handleRecordChange(index, 'lunchStart', getCurrentTime())} className="text-[9px] font-medium text-indigo-600 hover:text-indigo-800 uppercase tracking-wider bg-indigo-50 px-1 py-0.5 rounded" title="Set to current time">Now</button>
+                            <button onClick={() => handleRecordChange(index, 'lunchStart', getCurrentTime())} className="text-[9px] font-medium text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-300 uppercase tracking-wider bg-indigo-50 dark:bg-indigo-900/30 px-1 py-0.5 rounded" title="Set to current time">Now</button>
                           )}
                           {record.lunchStart && (
-                            <button onClick={() => handleRecordChange(index, 'lunchStart', '')} className="text-gray-400 hover:text-red-500" title="Clear">
+                            <button onClick={() => handleRecordChange(index, 'lunchStart', '')} className="text-gray-400 dark:text-slate-500 hover:text-red-500 dark:hover:text-red-400" title="Clear">
                               <X className="w-3 h-3" />
                             </button>
                           )}
@@ -1064,17 +1221,17 @@ export default function App() {
                           type="time"
                           value={record.lunchStart}
                           onChange={(e) => handleRecordChange(index, 'lunchStart', e.target.value)}
-                          className={`w-full rounded-md shadow-sm text-xl print:text-[11px] pdf:text-[11px] print:border-none pdf:border-none print:bg-transparent pdf:bg-transparent print:shadow-none pdf:shadow-none print:p-0 pdf:p-0 print:min-w-0 pdf:min-w-0 font-bold py-0 px-0 ${errors.lunchStart ? 'border-red-500 focus:ring-red-500 focus:border-red-500' : 'border-gray-300 focus:ring-indigo-500 focus:border-indigo-500'}`}
+                          className={`w-full rounded-md shadow-sm text-xl print:text-[11px] pdf:text-[11px] print:border-none pdf:border-none print:bg-transparent pdf:bg-transparent print:shadow-none pdf:shadow-none print:p-0 pdf:p-0 print:min-w-0 pdf:min-w-0 font-bold py-0 px-0 bg-transparent text-gray-900 dark:text-white ${errors.lunchStart ? 'border-red-500 focus:ring-red-500 focus:border-red-500' : 'border-gray-300 dark:border-slate-600 focus:ring-indigo-500 focus:border-indigo-500'}`}
                         />
                         {errors.lunchStart && <div className="text-[10px] text-red-500 mt-1 print:hidden pdf:hidden">{errors.lunchStart}</div>}
                       </td>
                       <td className="px-2 py-2 print:px-1 pdf:px-1 print:py-1 pdf:py-1 align-top">
                         <div className="h-6 print:hidden pdf:hidden flex justify-end items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity focus-within:opacity-100">
                           {!record.lunchEnd && (
-                            <button onClick={() => handleRecordChange(index, 'lunchEnd', getCurrentTime())} className="text-[9px] font-medium text-indigo-600 hover:text-indigo-800 uppercase tracking-wider bg-indigo-50 px-1 py-0.5 rounded" title="Set to current time">Now</button>
+                            <button onClick={() => handleRecordChange(index, 'lunchEnd', getCurrentTime())} className="text-[9px] font-medium text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-300 uppercase tracking-wider bg-indigo-50 dark:bg-indigo-900/30 px-1 py-0.5 rounded" title="Set to current time">Now</button>
                           )}
                           {record.lunchEnd && (
-                            <button onClick={() => handleRecordChange(index, 'lunchEnd', '')} className="text-gray-400 hover:text-red-500" title="Clear">
+                            <button onClick={() => handleRecordChange(index, 'lunchEnd', '')} className="text-gray-400 dark:text-slate-500 hover:text-red-500 dark:hover:text-red-400" title="Clear">
                               <X className="w-3 h-3" />
                             </button>
                           )}
@@ -1083,17 +1240,17 @@ export default function App() {
                           type="time"
                           value={record.lunchEnd}
                           onChange={(e) => handleRecordChange(index, 'lunchEnd', e.target.value)}
-                          className={`w-full rounded-md shadow-sm text-xl print:text-[11px] pdf:text-[11px] print:border-none pdf:border-none print:bg-transparent pdf:bg-transparent print:shadow-none pdf:shadow-none print:p-0 pdf:p-0 print:min-w-0 pdf:min-w-0 font-bold py-0 px-0 ${errors.lunchEnd ? 'border-red-500 focus:ring-red-500 focus:border-red-500' : 'border-gray-300 focus:ring-indigo-500 focus:border-indigo-500'}`}
+                          className={`w-full rounded-md shadow-sm text-xl print:text-[11px] pdf:text-[11px] print:border-none pdf:border-none print:bg-transparent pdf:bg-transparent print:shadow-none pdf:shadow-none print:p-0 pdf:p-0 print:min-w-0 pdf:min-w-0 font-bold py-0 px-0 bg-transparent text-gray-900 dark:text-white ${errors.lunchEnd ? 'border-red-500 focus:ring-red-500 focus:border-red-500' : 'border-gray-300 dark:border-slate-600 focus:ring-indigo-500 focus:border-indigo-500'}`}
                         />
                         {errors.lunchEnd && <div className="text-[10px] text-red-500 mt-1 print:hidden pdf:hidden">{errors.lunchEnd}</div>}
                       </td>
                       <td className="px-2 py-2 print:px-1 pdf:px-1 print:py-1 pdf:py-1 align-top">
                         <div className="h-6 print:hidden pdf:hidden flex justify-end items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity focus-within:opacity-100">
                           {!record.timeOut && (
-                            <button onClick={() => handleRecordChange(index, 'timeOut', getCurrentTime())} className="text-[9px] font-medium text-indigo-600 hover:text-indigo-800 uppercase tracking-wider bg-indigo-50 px-1 py-0.5 rounded" title="Set to current time">Now</button>
+                            <button onClick={() => handleRecordChange(index, 'timeOut', getCurrentTime())} className="text-[9px] font-medium text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-300 uppercase tracking-wider bg-indigo-50 dark:bg-indigo-900/30 px-1 py-0.5 rounded" title="Set to current time">Now</button>
                           )}
                           {record.timeOut && (
-                            <button onClick={() => handleRecordChange(index, 'timeOut', '')} className="text-gray-400 hover:text-red-500" title="Clear">
+                            <button onClick={() => handleRecordChange(index, 'timeOut', '')} className="text-gray-400 dark:text-slate-500 hover:text-red-500 dark:hover:text-red-400" title="Clear">
                               <X className="w-3 h-3" />
                             </button>
                           )}
@@ -1102,7 +1259,7 @@ export default function App() {
                           type="time"
                           value={record.timeOut}
                           onChange={(e) => handleRecordChange(index, 'timeOut', e.target.value)}
-                          className={`w-full rounded-md shadow-sm text-xl print:text-[11px] pdf:text-[11px] print:border-none pdf:border-none print:bg-transparent pdf:bg-transparent print:shadow-none pdf:shadow-none print:p-0 pdf:p-0 print:min-w-0 pdf:min-w-0 font-bold py-0 px-0 ${errors.timeOut ? 'border-red-500 focus:ring-red-500 focus:border-red-500' : 'border-gray-300 focus:ring-indigo-500 focus:border-indigo-500'}`}
+                          className={`w-full rounded-md shadow-sm text-xl print:text-[11px] pdf:text-[11px] print:border-none pdf:border-none print:bg-transparent pdf:bg-transparent print:shadow-none pdf:shadow-none print:p-0 pdf:p-0 print:min-w-0 pdf:min-w-0 font-bold py-0 px-0 bg-transparent text-gray-900 dark:text-white ${errors.timeOut ? 'border-red-500 focus:ring-red-500 focus:border-red-500' : 'border-gray-300 dark:border-slate-600 focus:ring-indigo-500 focus:border-indigo-500'}`}
                         />
                         {errors.timeOut && <div className="text-[10px] text-red-500 mt-1 print:hidden pdf:hidden">{errors.timeOut}</div>}
                       </td>
@@ -1112,7 +1269,7 @@ export default function App() {
                           type="text"
                           value={record.totalHours}
                           onChange={(e) => handleRecordChange(index, 'totalHours', e.target.value)}
-                          className={`w-16 print:w-full pdf:w-full rounded-md shadow-sm text-2xl print:text-[11px] pdf:text-[11px] print:border-none pdf:border-none print:bg-transparent pdf:bg-transparent print:shadow-none pdf:shadow-none print:p-0 pdf:p-0 print:min-w-0 pdf:min-w-0 font-extrabold py-0 px-0 font-mono bg-indigo-50 text-indigo-700 print:text-gray-900 pdf:text-gray-900 text-center ${errors.totalHours ? 'border-red-500 focus:ring-red-500 focus:border-red-500' : 'border-gray-300 focus:ring-indigo-500 focus:border-indigo-500'}`}
+                          className={`w-16 print:w-full pdf:w-full rounded-md shadow-sm text-2xl print:text-[11px] pdf:text-[11px] print:border-none pdf:border-none print:bg-transparent pdf:bg-transparent print:shadow-none pdf:shadow-none print:p-0 pdf:p-0 print:min-w-0 pdf:min-w-0 font-extrabold py-0 px-0 font-mono bg-indigo-50/50 dark:bg-indigo-900/20 text-indigo-700 dark:text-indigo-300 print:text-gray-900 pdf:text-gray-900 text-center ${errors.totalHours ? 'border-red-500 focus:ring-red-500 focus:border-red-500' : 'border-gray-300 dark:border-slate-600 focus:ring-indigo-500 focus:border-indigo-500'}`}
                           placeholder="0.00"
                         />
                         {errors.totalHours && <div className="text-[10px] text-red-500 mt-1 print:hidden pdf:hidden">{errors.totalHours}</div>}
@@ -1123,7 +1280,7 @@ export default function App() {
                           type="text"
                           value={record.notes}
                           onChange={(e) => handleRecordChange(index, 'notes', e.target.value)}
-                          className="w-full border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 text-xl print:text-[10px] pdf:text-[10px] print:border-none pdf:border-none print:bg-transparent pdf:bg-transparent print:shadow-none pdf:shadow-none print:p-0 pdf:p-0 print:min-w-0 pdf:min-w-0 font-bold py-0 px-0"
+                          className="w-full border-gray-300 dark:border-slate-600 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 text-xl print:text-[10px] pdf:text-[10px] print:border-none pdf:border-none print:bg-transparent pdf:bg-transparent print:shadow-none pdf:shadow-none print:p-0 pdf:p-0 print:min-w-0 pdf:min-w-0 font-bold py-0 px-0 bg-transparent text-gray-900 dark:text-white"
                           placeholder="..."
                         />
                       </td>
@@ -1138,45 +1295,45 @@ export default function App() {
               <div className="w-full md:w-1/2 print:w-1/2 pdf:w-1/2 space-y-6 print:space-y-4 pdf:space-y-4">
                 <div className="space-y-1">
                   <div className="flex justify-between items-end mb-1">
-                    <label className="block text-sm font-medium text-gray-700">Employee Signature</label>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-slate-300">Employee Signature</label>
                     <button 
                       onClick={() => { sigCanvas.current?.clear(); setSignature(''); }} 
-                      className="text-xs text-indigo-600 hover:text-indigo-800 font-medium print:hidden pdf:hidden"
+                      className="text-xs text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-300 font-medium print:hidden pdf:hidden"
                     >
                       Clear Signature
                     </button>
                   </div>
-                  <div className="border border-gray-300 print:border-b-2 pdf:border-b-2 print:border-x-0 pdf:border-x-0 print:border-t-0 pdf:border-t-0 print:border-gray-800 pdf:border-gray-800 print:rounded-none pdf:rounded-none rounded-lg bg-white overflow-hidden shadow-sm print:shadow-none pdf:shadow-none">
+                  <div className="border border-gray-300 dark:border-slate-600 print:border-b-2 pdf:border-b-2 print:border-x-0 pdf:border-x-0 print:border-t-0 pdf:border-t-0 print:border-gray-800 pdf:border-gray-800 print:rounded-none pdf:rounded-none rounded-lg bg-white dark:bg-slate-800 overflow-hidden shadow-sm print:shadow-none pdf:shadow-none">
                     <SignatureCanvas 
                       ref={sigCanvas}
-                      penColor="black"
+                      penColor={isDarkMode ? "white" : "black"}
                       clearOnResize={false}
-                      canvasProps={{className: 'w-full h-24 sm:h-32 print:h-16 pdf:h-16 bg-white'}}
+                      canvasProps={{className: 'w-full h-24 sm:h-32 print:h-16 pdf:h-16 bg-white dark:bg-slate-800'}}
                       onEnd={() => setSignature(sigCanvas.current?.toDataURL() || '')}
                     />
                   </div>
                 </div>
                 <div className="space-y-1">
-                  <label className="block text-sm font-medium text-gray-700">Date</label>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-slate-300">Date</label>
                   <input
                     type="date"
                     value={date}
                     onChange={(e) => setDate(e.target.value)}
-                    className="block w-full border-0 border-b-2 border-gray-200 print:border-gray-800 pdf:border-gray-800 focus:border-indigo-600 focus:ring-0 px-0 py-2 print:py-0 pdf:py-0 text-base sm:text-lg print:text-sm pdf:text-sm transition-colors bg-transparent"
+                    className="block w-full border-0 border-b-2 border-gray-200 dark:border-slate-700 print:border-gray-800 pdf:border-gray-800 focus:border-indigo-600 dark:focus:border-indigo-400 focus:ring-0 px-0 py-2 print:py-0 pdf:py-0 text-base sm:text-lg print:text-sm pdf:text-sm transition-colors bg-transparent text-gray-900 dark:text-white"
                   />
                 </div>
               </div>
               
-              <div className="w-full md:w-1/3 print:w-1/3 pdf:w-1/3 bg-gray-50 print:bg-transparent pdf:bg-transparent p-4 sm:p-6 print:p-0 pdf:p-0 rounded-xl border border-gray-200 print:border-none pdf:border-none">
+              <div className="w-full md:w-1/3 print:w-1/3 pdf:w-1/3 bg-gray-50/50 dark:bg-slate-800/30 print:bg-transparent pdf:bg-transparent p-4 sm:p-6 print:p-0 pdf:p-0 rounded-xl border border-gray-200 dark:border-slate-700/50 print:border-none pdf:border-none">
                 <div className="flex justify-between items-center mb-4 print:mb-2 pdf:mb-2">
-                  <span className="text-base sm:text-lg print:text-sm pdf:text-sm font-medium text-gray-700">Hourly Rate:</span>
+                  <span className="text-base sm:text-lg print:text-sm pdf:text-sm font-medium text-gray-700 dark:text-slate-300">Hourly Rate:</span>
                   <div className="relative">
-                    <span className="absolute left-0 top-1/2 -translate-y-1/2 text-gray-500 font-bold print:text-sm pdf:text-sm">$</span>
+                    <span className="absolute left-0 top-1/2 -translate-y-1/2 text-gray-500 dark:text-slate-400 font-bold print:text-sm pdf:text-sm">$</span>
                     <input
                       type="number"
                       value={hourlyRate}
                       onChange={(e) => setHourlyRate(e.target.value)}
-                      className="w-24 sm:w-32 print:w-24 pdf:w-24 text-right text-lg sm:text-xl print:text-sm pdf:text-sm font-bold text-gray-800 bg-transparent border-b-2 border-gray-300 print:border-gray-800 pdf:border-gray-800 focus:border-indigo-600 focus:ring-0 px-0 py-1 print:py-0 pdf:py-0 pl-4"
+                      className="w-24 sm:w-32 print:w-24 pdf:w-24 text-right text-lg sm:text-xl print:text-sm pdf:text-sm font-bold text-gray-800 dark:text-white bg-transparent border-b-2 border-gray-300 dark:border-slate-600 print:border-gray-800 pdf:border-gray-800 focus:border-indigo-600 dark:focus:border-indigo-400 focus:ring-0 px-0 py-1 print:py-0 pdf:py-0 pl-4"
                       placeholder="0.00"
                       min="0"
                       step="0.01"
@@ -1184,12 +1341,12 @@ export default function App() {
                   </div>
                 </div>
                 <div className="flex justify-between items-center mb-4 print:mb-2 pdf:mb-2">
-                  <span className="text-base sm:text-lg print:text-sm pdf:text-sm font-medium text-gray-700">Total Hours:</span>
+                  <span className="text-base sm:text-lg print:text-sm pdf:text-sm font-medium text-gray-700 dark:text-slate-300">Total Hours:</span>
                   <input
                     type="text"
                     value={totalHours}
                     onChange={(e) => setTotalHours(e.target.value)}
-                    className={`w-24 sm:w-32 print:w-24 pdf:w-24 text-right text-xl sm:text-2xl print:text-base pdf:text-base font-bold text-indigo-600 print:text-gray-900 pdf:text-gray-900 bg-transparent border-b-2 focus:ring-0 px-0 py-1 print:py-0 pdf:py-0 ${totalHours && isNaN(Number(totalHours)) ? 'border-red-500 focus:border-red-500' : 'border-indigo-200 print:border-gray-800 pdf:border-gray-800 focus:border-indigo-600'}`}
+                    className={`w-24 sm:w-32 print:w-24 pdf:w-24 text-right text-xl sm:text-2xl print:text-base pdf:text-base font-bold text-indigo-600 dark:text-indigo-400 print:text-gray-900 pdf:text-gray-900 bg-transparent border-b-2 focus:ring-0 px-0 py-1 print:py-0 pdf:py-0 ${totalHours && isNaN(Number(totalHours)) ? 'border-red-500 focus:border-red-500' : 'border-indigo-200 dark:border-indigo-800/50 print:border-gray-800 pdf:border-gray-800 focus:border-indigo-600 dark:focus:border-indigo-400'}`}
                     placeholder="0.00"
                   />
                   {totalHours && isNaN(Number(totalHours)) && (
@@ -1198,18 +1355,18 @@ export default function App() {
                 </div>
                 
                 {hourlyRate && !isNaN(Number(hourlyRate)) && totalWeeklyHoursNum > 0 && (
-                  <div className="mt-4 pt-4 border-t border-gray-200 print:border-gray-800 pdf:border-gray-800 space-y-2 print:space-y-1 pdf:space-y-1">
-                    <div className="flex justify-between items-center text-sm print:text-xs pdf:text-xs text-gray-600 print:text-gray-800 pdf:text-gray-800">
+                  <div className="mt-4 pt-4 border-t border-gray-200 dark:border-slate-700/50 print:border-gray-800 pdf:border-gray-800 space-y-2 print:space-y-1 pdf:space-y-1">
+                    <div className="flex justify-between items-center text-sm print:text-xs pdf:text-xs text-gray-600 dark:text-slate-300 print:text-gray-800 pdf:text-gray-800">
                       <span>Regular ({regularHours.toFixed(2)}h):</span>
                       <span>${regularPay.toFixed(2)}</span>
                     </div>
                     {overtimeHours > 0 && (
-                      <div className="flex justify-between items-center text-sm print:text-xs pdf:text-xs text-amber-600 print:text-gray-800 pdf:text-gray-800 font-medium">
+                      <div className="flex justify-between items-center text-sm print:text-xs pdf:text-xs text-amber-600 dark:text-amber-400 print:text-gray-800 pdf:text-gray-800 font-medium">
                         <span>Overtime ({overtimeHours.toFixed(2)}h @ 1.5x):</span>
                         <span>${overtimePay.toFixed(2)}</span>
                       </div>
                     )}
-                    <div className="flex justify-between items-center text-lg print:text-base pdf:text-base font-bold text-gray-900 pt-2 border-t border-gray-200 print:border-gray-800 pdf:border-gray-800">
+                    <div className="flex justify-between items-center text-lg print:text-base pdf:text-base font-bold text-gray-900 dark:text-white pt-2 border-t border-gray-200 dark:border-slate-700/50 print:border-gray-800 pdf:border-gray-800">
                       <span>Total Pay:</span>
                       <span>${totalPay.toFixed(2)}</span>
                     </div>
@@ -1223,14 +1380,14 @@ export default function App() {
 
         {/* Modals */}
         {showClearConfirm && (
-          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-            <div className="bg-white rounded-xl shadow-xl max-w-sm w-full p-6">
-              <h3 className="text-lg font-semibold text-gray-900 mb-2">Clear Timesheet?</h3>
-              <p className="text-gray-600 mb-6">Are you sure you want to clear all fields? This action cannot be undone.</p>
+          <div className="fixed inset-0 bg-black/50 dark:bg-slate-900/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+            <div className="bg-white/90 dark:bg-slate-800/90 backdrop-blur-xl rounded-2xl shadow-2xl max-w-sm w-full p-6 border border-white/20 dark:border-slate-700">
+              <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">Clear Timesheet?</h3>
+              <p className="text-gray-600 dark:text-slate-300 mb-6">Are you sure you want to clear all fields? This action cannot be undone.</p>
               <div className="flex justify-end gap-3">
                 <button
                   onClick={() => setShowClearConfirm(false)}
-                  className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors"
+                  className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-slate-200 bg-gray-100 dark:bg-slate-700 rounded-lg hover:bg-gray-200 dark:hover:bg-slate-600 transition-colors"
                 >
                   Cancel
                 </button>
@@ -1246,14 +1403,14 @@ export default function App() {
         )}
 
         {showEmailConfirm && (
-          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-            <div className="bg-white rounded-xl shadow-xl max-w-sm w-full p-6">
-              <h3 className="text-lg font-semibold text-gray-900 mb-2">Send Timesheet?</h3>
-              <p className="text-gray-600 mb-6">Are you sure you want to send this timesheet to {recipientEmail}?</p>
+          <div className="fixed inset-0 bg-black/50 dark:bg-slate-900/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+            <div className="bg-white/90 dark:bg-slate-800/90 backdrop-blur-xl rounded-2xl shadow-2xl max-w-sm w-full p-6 border border-white/20 dark:border-slate-700">
+              <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">Send Timesheet?</h3>
+              <p className="text-gray-600 dark:text-slate-300 mb-6">Are you sure you want to send this timesheet to {recipientEmail}?</p>
               <div className="flex justify-end gap-3">
                 <button
                   onClick={() => setShowEmailConfirm(false)}
-                  className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors"
+                  className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-slate-200 bg-gray-100 dark:bg-slate-700 rounded-lg hover:bg-gray-200 dark:hover:bg-slate-600 transition-colors"
                 >
                   Cancel
                 </button>
@@ -1269,37 +1426,37 @@ export default function App() {
         )}
 
         {isHistoryOpen && (
-          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-            <div className="bg-white rounded-xl shadow-xl max-w-2xl w-full max-h-[80vh] flex flex-col">
-              <div className="flex items-center justify-between p-4 sm:p-6 border-b border-gray-100">
-                <h3 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
-                  <History className="w-5 h-5 text-indigo-600" />
+          <div className="fixed inset-0 bg-black/50 dark:bg-slate-900/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+            <div className="bg-white/90 dark:bg-slate-800/90 backdrop-blur-xl rounded-2xl shadow-2xl max-w-2xl w-full max-h-[80vh] flex flex-col border border-white/20 dark:border-slate-700">
+              <div className="flex items-center justify-between p-4 sm:p-6 border-b border-gray-100 dark:border-slate-700/50">
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-white flex items-center gap-2">
+                  <History className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
                   Timesheet History
                 </h3>
                 <button
                   onClick={() => setIsHistoryOpen(false)}
-                  className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+                  className="p-2 text-gray-400 dark:text-slate-500 hover:text-gray-600 dark:hover:text-slate-300 hover:bg-gray-100 dark:hover:bg-slate-800 rounded-lg transition-colors"
                 >
                   <X className="w-5 h-5" />
                 </button>
               </div>
               
-              <div className="p-4 sm:p-6 border-b border-gray-100 bg-gray-50">
+              <div className="p-4 sm:p-6 border-b border-gray-100 dark:border-slate-700/50 bg-gray-50/50 dark:bg-slate-800/30">
                 <div className="relative">
-                  <Search className="w-5 h-5 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <Search className="w-5 h-5 text-gray-400 dark:text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
                   <input
                     type="text"
                     placeholder="Search by week, name, or day..."
                     value={historySearchTerm}
                     onChange={(e) => setHistorySearchTerm(e.target.value)}
-                    className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                    className="w-full pl-10 pr-4 py-2 border border-gray-300 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 bg-white dark:bg-slate-800 text-gray-900 dark:text-white"
                   />
                 </div>
               </div>
 
               <div className="flex-1 overflow-y-auto p-4 sm:p-6">
                 {filteredHistory.length === 0 ? (
-                  <div className="text-center py-8 text-gray-500">
+                  <div className="text-center py-8 text-gray-500 dark:text-slate-400">
                     No history found matching your search.
                   </div>
                 ) : (
@@ -1308,18 +1465,18 @@ export default function App() {
                       <div
                         key={week}
                         onClick={() => loadHistoryItem(week)}
-                        className="group flex items-center justify-between p-4 bg-white border border-gray-200 rounded-xl hover:border-indigo-300 hover:shadow-sm cursor-pointer transition-all"
+                        className="group flex items-center justify-between p-4 bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-xl hover:border-indigo-300 dark:hover:border-indigo-500 hover:shadow-sm cursor-pointer transition-all"
                       >
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-3 mb-1">
-                            <span className="font-medium text-gray-900">Week of {week}</span>
+                            <span className="font-medium text-gray-900 dark:text-white">Week of {week}</span>
                             {data.name && (
-                              <span className="px-2 py-0.5 text-xs font-medium text-indigo-700 bg-indigo-50 rounded-full">
+                              <span className="px-2 py-0.5 text-xs font-medium text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-900/30 rounded-full">
                                 {data.name}
                               </span>
                             )}
                           </div>
-                          <div className="text-sm text-gray-500 flex flex-wrap items-center gap-x-4 gap-y-1">
+                          <div className="text-sm text-gray-500 dark:text-slate-400 flex flex-wrap items-center gap-x-4 gap-y-1">
                             <span>{data.records?.filter((r: any) => r.totalHours).length || 0} days logged</span>
                             <span>Total: {data.records?.reduce((acc: number, r: any) => acc + (parseFloat(r.totalHours) || 0), 0).toFixed(2) || '0.00'} hrs</span>
                             {data.lastModified && (
@@ -1327,7 +1484,7 @@ export default function App() {
                             )}
                           </div>
                           {data.sentLogs && data.sentLogs.length > 0 && (
-                            <div className="text-xs text-emerald-600 mt-1 flex items-center gap-1">
+                            <div className="text-xs text-emerald-600 dark:text-emerald-400 mt-1 flex items-center gap-1">
                               <CheckCircle2 className="w-3 h-3" />
                               Sent {data.sentLogs.length} time{data.sentLogs.length !== 1 ? 's' : ''} (Last: {new Date(data.sentLogs[data.sentLogs.length - 1].date).toLocaleDateString()})
                             </div>
@@ -1336,12 +1493,12 @@ export default function App() {
                         <div className="flex items-center gap-2">
                           <button
                             onClick={(e) => deleteHistoryItem(week, e)}
-                            className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg opacity-0 group-hover:opacity-100 transition-all"
+                            className="p-2 text-gray-400 dark:text-slate-500 hover:text-red-600 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg opacity-0 group-hover:opacity-100 transition-all"
                             title="Delete from history"
                           >
                             <Trash2 className="w-4 h-4" />
                           </button>
-                          <ChevronRight className="w-5 h-5 text-gray-400 group-hover:text-indigo-600 transition-colors" />
+                          <ChevronRight className="w-5 h-5 text-gray-400 dark:text-slate-500 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors" />
                         </div>
                       </div>
                     ))}
@@ -1354,13 +1511,13 @@ export default function App() {
 
         {/* Auth Modal */}
         {showAuthModal && (
-          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-            <div className="bg-white rounded-xl shadow-xl max-w-sm w-full p-6">
+          <div className="fixed inset-0 bg-black/50 dark:bg-slate-900/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+            <div className="bg-white/90 dark:bg-slate-800/90 backdrop-blur-xl rounded-2xl shadow-2xl max-w-sm w-full p-6 border border-white/20 dark:border-slate-700">
               <div className="flex justify-between items-center mb-4">
-                <h3 className="text-lg font-semibold text-gray-900">
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
                   Sign In / Register
                 </h3>
-                <button onClick={() => { setShowAuthModal(false); setMagicLinkSent(false); }} className="text-gray-400 hover:text-gray-600">
+                <button onClick={() => { setShowAuthModal(false); setMagicLinkSent(false); }} className="text-gray-400 dark:text-slate-500 hover:text-gray-600 dark:hover:text-slate-300">
                   <X className="w-5 h-5" />
                 </button>
               </div>
@@ -1368,23 +1525,23 @@ export default function App() {
               {!magicLinkSent ? (
                 <form onSubmit={handleAuth} className="space-y-4">
                   {authError && (
-                    <div className="p-3 text-sm text-red-600 bg-red-50 rounded-lg border border-red-100">
+                    <div className="p-3 text-sm text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 rounded-lg border border-red-100 dark:border-red-900/50">
                       {authError}
                     </div>
                   )}
                   
-                  <p className="text-sm text-gray-600">
+                  <p className="text-sm text-gray-600 dark:text-slate-300">
                     Enter your email and we'll send you a magic link to sign in instantly. No password needed.
                   </p>
                   
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-slate-300 mb-1">Email</label>
                     <input
                       type="email"
                       required
                       value={authEmail}
                       onChange={(e) => setAuthEmail(e.target.value)}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                      className="w-full px-3 py-2 border border-gray-300 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 bg-white dark:bg-slate-800 text-gray-900 dark:text-white"
                       placeholder="you@example.com"
                     />
                   </div>
@@ -1400,18 +1557,18 @@ export default function App() {
                 </form>
               ) : (
                 <div className="text-center space-y-4 py-4">
-                  <div className="mx-auto w-12 h-12 bg-emerald-100 rounded-full flex items-center justify-center">
-                    <Mail className="w-6 h-6 text-emerald-600" />
+                  <div className="mx-auto w-12 h-12 bg-emerald-100 dark:bg-emerald-900/30 rounded-full flex items-center justify-center">
+                    <Mail className="w-6 h-6 text-emerald-600 dark:text-emerald-400" />
                   </div>
-                  <h4 className="text-lg font-medium text-gray-900">Check your email</h4>
-                  <p className="text-sm text-gray-600">
+                  <h4 className="text-lg font-medium text-gray-900 dark:text-white">Check your email</h4>
+                  <p className="text-sm text-gray-600 dark:text-slate-300">
                     We've sent a magic link to <strong>{authEmail}</strong>. Click the link to sign in.
                   </p>
                   
                   {devLink && (
-                    <div className="mt-6 p-4 bg-gray-50 rounded-lg border border-gray-200 text-left">
-                      <p className="text-xs text-gray-500 font-semibold uppercase tracking-wider mb-2">Development Mode</p>
-                      <a href={devLink} className="text-sm text-indigo-600 hover:text-indigo-800 break-all underline">
+                    <div className="mt-6 p-4 bg-gray-50 dark:bg-slate-800/50 rounded-lg border border-gray-200 dark:border-slate-700 text-left">
+                      <p className="text-xs text-gray-500 dark:text-slate-400 font-semibold uppercase tracking-wider mb-2">Development Mode</p>
+                      <a href={devLink} className="text-sm text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-300 break-all underline">
                         {devLink}
                       </a>
                     </div>
