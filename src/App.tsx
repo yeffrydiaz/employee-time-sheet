@@ -4,6 +4,9 @@ import SignatureCanvas from 'react-signature-canvas';
 import { motion, AnimatePresence } from 'motion/react';
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
+import { auth, db, googleProvider } from './firebase';
+import { signInWithPopup, signOut, onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
+import { collection, doc, setDoc, getDocs, deleteDoc, serverTimestamp, query, where, onSnapshot } from 'firebase/firestore';
 
 interface DailyRecord {
   day: string;
@@ -98,14 +101,10 @@ export default function App() {
   const [showEmailHistory, setShowEmailHistory] = useState(false);
 
   // Auth states
-  const [user, setUser] = useState<{id: number, email: string} | null>(null);
-  const [token, setToken] = useState<string | null>(localStorage.getItem('auth_token'));
+  const [user, setUser] = useState<FirebaseUser | null>(null);
   const [showAuthModal, setShowAuthModal] = useState(false);
-  const [authEmail, setAuthEmail] = useState('');
   const [authError, setAuthError] = useState('');
   const [isAuthenticating, setIsAuthenticating] = useState(false);
-  const [magicLinkSent, setMagicLinkSent] = useState(false);
-  const [devLink, setDevLink] = useState('');
   
   // Dark mode state
   const [isDarkMode, setIsDarkMode] = useState(() => {
@@ -130,71 +129,29 @@ export default function App() {
     }
   }, [isDarkMode]);
 
-  // Check for auth token in URL (from magic link redirect)
+  // Listen for Firebase Auth state changes
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const urlToken = params.get('auth_token');
-    if (urlToken) {
-      localStorage.setItem('auth_token', urlToken);
-      setToken(urlToken);
-      // Clean up URL
-      window.history.replaceState({}, document.title, window.location.pathname);
-    }
-  }, []);
-
-  // Fetch user profile and sync data
-  useEffect(() => {
-    if (token) {
-      fetch('/api/auth/me', {
-        headers: { 'Authorization': `Bearer ${token}` }
-      })
-      .then(res => res.json())
-      .then(data => {
-        if (data.user) {
-          setUser(data.user);
-          syncDataToCloud(token);
-        } else {
-          handleLogout();
-        }
-      })
-      .catch(() => {
-        handleLogout();
-      });
-    }
-  }, [token]);
-
-  const syncDataToCloud = async (authToken: string) => {
-    try {
-      const historyKey = `${HISTORY_STORAGE_KEY_PREFIX}${companyName}`;
-      let historyStr = localStorage.getItem(historyKey);
-      if (!historyStr && companyName === 'Royal Transportation') {
-        historyStr = localStorage.getItem('employee_timesheet_history');
+    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+      setUser(currentUser);
+      if (currentUser) {
+        // Load history from Firestore
+        const q = query(collection(db, 'users', currentUser.uid, 'timesheets'), where('companyName', '==', companyName));
+        getDocs(q).then((querySnapshot) => {
+          const history: Record<string, any> = {};
+          querySnapshot.forEach((doc) => {
+            const data = doc.data();
+            if (data.data) {
+              history[data.weekOf] = JSON.parse(data.data);
+            }
+          });
+          const historyKey = `${HISTORY_STORAGE_KEY_PREFIX}${companyName}`;
+          localStorage.setItem(historyKey, JSON.stringify(history));
+          setHistoryData(history);
+        }).catch(e => console.error('Error fetching timesheets from Firestore:', e));
       }
-      const history = JSON.parse(historyStr || '{}');
-      
-      // Sync local to cloud
-      await fetch('/api/timesheets/sync', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${authToken}`
-        },
-        body: JSON.stringify({ history, companyName })
-      });
-      
-      // Fetch latest from cloud
-      const res = await fetch(`/api/timesheets?company=${encodeURIComponent(companyName)}`, {
-        headers: { 'Authorization': `Bearer ${authToken}` }
-      });
-      const data = await res.json();
-      if (data.history) {
-        localStorage.setItem(historyKey, JSON.stringify(data.history));
-        setHistoryData(data.history);
-      }
-    } catch (e) {
-      console.error('Sync failed', e);
-    }
-  };
+    });
+    return () => unsubscribe();
+  }, [companyName]);
 
   const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -202,29 +159,8 @@ export default function App() {
     setAuthError('');
     
     try {
-      const res = await fetch(`/api/auth/magic-link`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: authEmail })
-      });
-      
-      if (!res.ok) {
-        const text = await res.text();
-        console.error('Magic link error response:', text);
-        try {
-          const data = JSON.parse(text);
-          throw new Error(data.error || 'Failed to send magic link');
-        } catch (e) {
-          throw new Error(`Server error: ${res.status} ${res.statusText}`);
-        }
-      }
-      
-      const data = await res.json();
-      
-      setMagicLinkSent(true);
-      if (data.devLink) {
-        setDevLink(data.devLink);
-      }
+      await signInWithPopup(auth, googleProvider);
+      setShowAuthModal(false);
     } catch (err: any) {
       setAuthError(err.message);
     } finally {
@@ -232,10 +168,13 @@ export default function App() {
     }
   };
 
-  const handleLogout = () => {
-    setToken(null);
-    setUser(null);
-    localStorage.removeItem('auth_token');
+  const handleLogout = async () => {
+    try {
+      await signOut(auth);
+      setUser(null);
+    } catch (error) {
+      console.error("Error signing out", error);
+    }
   };
 
   const getCurrentTime = () => {
@@ -274,15 +213,15 @@ export default function App() {
         localStorage.setItem(historyKey, JSON.stringify(history));
         
         // Sync to cloud if logged in
-        if (token) {
-          fetch('/api/timesheets', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${token}`
-            },
-            body: JSON.stringify({ weekOf, data: history[weekOf], companyName })
-          }).catch(e => console.error('Failed to save to cloud', e));
+        if (user) {
+          const timesheetRef = doc(db, 'users', user.uid, 'timesheets', `${companyName}_${weekOf}`);
+          setDoc(timesheetRef, {
+            userId: user.uid,
+            companyName,
+            weekOf,
+            data: JSON.stringify(history[weekOf]),
+            updatedAt: serverTimestamp()
+          }).catch(e => console.error('Failed to save to Firestore', e));
         }
       } catch (e) {
         console.error('Failed to save to history', e);
@@ -1524,64 +1463,31 @@ export default function App() {
                 <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
                   Sign In / Register
                 </h3>
-                <button onClick={() => { setShowAuthModal(false); setMagicLinkSent(false); }} className="text-gray-400 dark:text-slate-500 hover:text-gray-600 dark:hover:text-slate-300">
+                <button onClick={() => setShowAuthModal(false)} className="text-gray-400 dark:text-slate-500 hover:text-gray-600 dark:hover:text-slate-300">
                   <X className="w-5 h-5" />
                 </button>
               </div>
               
-              {!magicLinkSent ? (
-                <form onSubmit={handleAuth} className="space-y-4">
-                  {authError && (
-                    <div className="p-3 text-sm text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 rounded-lg border border-red-100 dark:border-red-900/50">
-                      {authError}
-                    </div>
-                  )}
-                  
-                  <p className="text-sm text-gray-600 dark:text-slate-300">
-                    Enter your email and we'll send you a magic link to sign in instantly. No password needed.
-                  </p>
-                  
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-slate-300 mb-1">Email</label>
-                    <input
-                      type="email"
-                      required
-                      value={authEmail}
-                      onChange={(e) => setAuthEmail(e.target.value)}
-                      className="w-full px-3 py-2 border border-gray-300 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 bg-white dark:bg-slate-800 text-gray-900 dark:text-white"
-                      placeholder="you@example.com"
-                    />
+              <div className="space-y-4">
+                {authError && (
+                  <div className="p-3 text-sm text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 rounded-lg border border-red-100 dark:border-red-900/50">
+                    {authError}
                   </div>
-                  
-                  <button
-                    type="submit"
-                    disabled={isAuthenticating}
-                    className="w-full flex justify-center items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-70"
-                  >
-                    {isAuthenticating ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
-                    Send Magic Link
-                  </button>
-                </form>
-              ) : (
-                <div className="text-center space-y-4 py-4">
-                  <div className="mx-auto w-12 h-12 bg-emerald-100 dark:bg-emerald-900/30 rounded-full flex items-center justify-center">
-                    <Mail className="w-6 h-6 text-emerald-600 dark:text-emerald-400" />
-                  </div>
-                  <h4 className="text-lg font-medium text-gray-900 dark:text-white">Check your email</h4>
-                  <p className="text-sm text-gray-600 dark:text-slate-300">
-                    We've sent a magic link to <strong>{authEmail}</strong>. Click the link to sign in.
-                  </p>
-                  
-                  {devLink && (
-                    <div className="mt-6 p-4 bg-gray-50 dark:bg-slate-800/50 rounded-lg border border-gray-200 dark:border-slate-700 text-left">
-                      <p className="text-xs text-gray-500 dark:text-slate-400 font-semibold uppercase tracking-wider mb-2">Development Mode</p>
-                      <a href={devLink} className="text-sm text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-300 break-all underline">
-                        {devLink}
-                      </a>
-                    </div>
-                  )}
-                </div>
-              )}
+                )}
+                
+                <p className="text-sm text-gray-600 dark:text-slate-300">
+                  Sign in to save your timesheets securely to the cloud and access them from anywhere.
+                </p>
+                
+                <button
+                  onClick={handleAuth}
+                  disabled={isAuthenticating}
+                  className="w-full flex justify-center items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-70"
+                >
+                  {isAuthenticating ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+                  Sign in with Google
+                </button>
+              </div>
             </div>
           </div>
         )}

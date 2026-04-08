@@ -1,0 +1,62 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    function isValidStringLength(field, minLen, maxLen) {
+      return request.resource.data[field] is string &&
+             request.resource.data[field].size() >= minLen &&
+             request.resource.data[field].size() <= maxLen;
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+    function isValidUser() {
+      return hasOnlyAllowedFields(['email', 'createdAt']) &&
+             isValidStringLength('email', 3, 100) &&
+             request.resource.data.createdAt is timestamp;
+    }
+
+    function isValidTimesheet(userId) {
+      return hasOnlyAllowedFields(['userId', 'companyName', 'weekOf', 'data', 'updatedAt']) &&
+             request.resource.data.userId == userId &&
+             isValidStringLength('companyName', 1, 100) &&
+             isValidStringLength('weekOf', 1, 50) &&
+             request.resource.data.data is string &&
+             request.resource.data.data.size() <= 1000000 && // 1MB limit
+             request.resource.data.updatedAt is timestamp;
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+    match /users/{userId} {
+      allow read: if isOwner(userId);
+      allow create: if isOwner(userId) && isValidUser();
+      allow update: if isOwner(userId) && isValidUser() && request.resource.data.createdAt == resource.data.createdAt;
+      
+      match /timesheets/{timesheetId} {
+        allow read: if isOwner(userId);
+        allow create: if isOwner(userId) && isValidTimesheet(userId);
+        allow update: if isOwner(userId) && isValidTimesheet(userId);
+        allow delete: if isOwner(userId);
+      }
+    }
+  }
+}

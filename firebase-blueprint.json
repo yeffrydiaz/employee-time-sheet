@@ -1,0 +1,65 @@
+{
+  "entities": {
+    "Timesheet": {
+      "title": "Timesheet",
+      "description": "A timesheet record for an employee for a specific week and company.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "The ID of the user who owns this timesheet."
+        },
+        "companyName": {
+          "type": "string",
+          "description": "The name of the company this timesheet is for."
+        },
+        "weekOf": {
+          "type": "string",
+          "description": "The week this timesheet is for."
+        },
+        "data": {
+          "type": "string",
+          "description": "JSON stringified timesheet data."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When the timesheet was last updated."
+        }
+      },
+      "required": ["userId", "companyName", "weekOf", "data"]
+    },
+    "User": {
+      "title": "User",
+      "description": "A user profile.",
+      "type": "object",
+      "properties": {
+        "email": {
+          "type": "string",
+          "format": "email",
+          "description": "The user's email address."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When the user account was created."
+        }
+      },
+      "required": ["email"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": {
+        "$ref": "#/entities/User"
+      },
+      "description": "User profiles."
+    },
+    "/users/{userId}/timesheets/{timesheetId}": {
+      "schema": {
+        "$ref": "#/entities/Timesheet"
+      },
+      "description": "Timesheets for a specific user."
+    }
+  }
+}
