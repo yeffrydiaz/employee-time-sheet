@@ -395,6 +395,15 @@ export default function App() {
       Array.from(contentElement.children).forEach(child => child.classList.add('dark'));
     }
     
+    // FORCE the element to be 800px wide for accurate layout calculation on mobile
+    const originalWidth = contentElement.style.width;
+    const originalMaxWidth = contentElement.style.maxWidth;
+    const originalMargin = contentElement.style.margin;
+    
+    contentElement.style.width = '800px';
+    contentElement.style.maxWidth = '800px';
+    contentElement.style.margin = '0 auto';
+    
     // Wait for browser to recalculate layout
     await new Promise(resolve => setTimeout(resolve, 100));
     
@@ -404,11 +413,6 @@ export default function App() {
         pixelRatio: 2,
         // Ensure the background color matches the current theme
         backgroundColor: isDarkMode ? '#0f172a' : '#ffffff',
-        style: {
-          margin: '0',
-          width: '800px',
-          maxWidth: '800px',
-        }
       });
       
       const pdf = new jsPDF({
@@ -430,6 +434,11 @@ export default function App() {
       console.error('Error generating PDF:', error);
       return null;
     } finally {
+      // Restore original styles
+      contentElement.style.width = originalWidth;
+      contentElement.style.maxWidth = originalMaxWidth;
+      contentElement.style.margin = originalMargin;
+      
       // Restore hidden elements and remove pdf-mode
       contentElement.classList.remove('pdf-mode');
       if (isDarkMode) {
@@ -524,7 +533,7 @@ export default function App() {
   };
 
   const handlePrint = async () => {
-    setIsSending(true);
+    setIsGeneratingPDF(true);
     const printWindow = window.open('', '_blank');
     if (printWindow) {
       printWindow.document.write('Generating PDF for printing... Please wait.');
@@ -548,7 +557,7 @@ export default function App() {
       if (printWindow) printWindow.close();
       alert('There was an error generating the print view. Please try again.');
     } finally {
-      setIsSending(false);
+      setIsGeneratingPDF(false);
     }
   };
 
@@ -765,10 +774,20 @@ export default function App() {
                 </button>
                 <button
                   onClick={handlePrint}
-                  className="flex-1 sm:flex-none flex justify-center items-center gap-2 px-3 py-1.5 text-sm font-medium text-gray-700 dark:text-slate-200 bg-white dark:bg-slate-800 border border-gray-300 dark:border-slate-600 rounded-lg hover:bg-gray-50 dark:hover:bg-slate-700 transition-colors"
+                  disabled={isGeneratingPDF}
+                  className="flex-1 sm:flex-none flex justify-center items-center gap-2 px-3 py-1.5 text-sm font-medium text-gray-700 dark:text-slate-200 bg-white dark:bg-slate-800 border border-gray-300 dark:border-slate-600 rounded-lg hover:bg-gray-50 dark:hover:bg-slate-700 transition-colors disabled:opacity-70 disabled:cursor-not-allowed min-w-[90px]"
                 >
-                  <Printer className="w-4 h-4" />
-                  Print
+                  {isGeneratingPDF ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      Wait...
+                    </>
+                  ) : (
+                    <>
+                      <Printer className="w-4 h-4" />
+                      Print
+                    </>
+                  )}
                 </button>
               </div>
             </div>
