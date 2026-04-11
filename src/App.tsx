@@ -504,7 +504,7 @@ export default function App() {
     
     contentElement.style.width = '800px';
     contentElement.style.maxWidth = '800px';
-    contentElement.style.margin = '0 auto';
+    contentElement.style.margin = '0';
     
     // Wait for browser to recalculate layout
     await new Promise(resolve => setTimeout(resolve, 100));
@@ -515,6 +515,15 @@ export default function App() {
         pixelRatio: 2,
         // Ensure the background color matches the current theme
         backgroundColor: isDarkMode ? '#0f172a' : '#ffffff',
+        width: 800,
+        windowWidth: 800,
+        style: {
+          width: '800px',
+          maxWidth: '800px',
+          margin: '0',
+          transform: 'scale(1)',
+          transformOrigin: 'top left'
+        }
       });
       
       const pdf = new jsPDF({

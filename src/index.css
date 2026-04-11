@@ -111,7 +111,7 @@ body {
     overflow: visible !important;
   }
 
-  /* Hide input icons and spinners for printing to reduce minimum width */
+  /* Hide input icons and spinners for printing and PDF generation to reduce minimum width */
   input[type="time"]::-webkit-calendar-picker-indicator,
   input[type="date"]::-webkit-calendar-picker-indicator,
   input[type="time"]::-webkit-clear-button,
@@ -127,4 +127,21 @@ body {
     -moz-appearance: none !important;
     appearance: none !important;
   }
+}
+
+/* Apply the same hiding logic for pdf-mode */
+.pdf-mode input[type="time"]::-webkit-calendar-picker-indicator,
+.pdf-mode input[type="date"]::-webkit-calendar-picker-indicator,
+.pdf-mode input[type="time"]::-webkit-clear-button,
+.pdf-mode input[type="date"]::-webkit-clear-button,
+.pdf-mode input[type="number"]::-webkit-inner-spin-button,
+.pdf-mode input[type="number"]::-webkit-outer-spin-button {
+  display: none !important;
+  -webkit-appearance: none !important;
+}
+
+.pdf-mode input[type="time"], .pdf-mode input[type="date"] {
+  -webkit-appearance: none !important;
+  -moz-appearance: none !important;
+  appearance: none !important;
 }
