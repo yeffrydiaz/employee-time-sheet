@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Mail, Printer, Calculator, RefreshCw, Save, Loader2, History, Search, X, ChevronRight, Trash2, CheckCircle2, ChevronDown, User, LogOut, Moon, Sun, Clock } from 'lucide-react';
+import { Mail, Printer, Calculator, RefreshCw, Save, Loader2, History, Search, X, ChevronRight, Trash2, CheckCircle2, ChevronDown, User, LogOut, Moon, Sun, Clock, Settings } from 'lucide-react';
 import SignatureCanvas from 'react-signature-canvas';
 import { motion, AnimatePresence } from 'motion/react';
 import jsPDF from 'jspdf';
@@ -84,6 +84,20 @@ export default function App() {
   
   // History and Modal states
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [shiftSettings, setShiftSettings] = useState(() => {
+    const defaultSettings = { startTime: '09:00', lunchStart: '12:00', lunchEnd: '13:00', endTime: '17:00', enabled: false };
+    try {
+      const saved = localStorage.getItem('shift_settings');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        return { ...defaultSettings, ...parsed };
+      }
+      return defaultSettings;
+    } catch (e) {
+      return defaultSettings;
+    }
+  });
   const [historySearchTerm, setHistorySearchTerm] = useState('');
   const [historyData, setHistoryData] = useState<Record<string, any>>({});
   const [showClearConfirm, setShowClearConfirm] = useState(false);
@@ -112,7 +126,8 @@ export default function App() {
     if (typeof window !== 'undefined') {
       const saved = localStorage.getItem('theme');
       if (saved) return saved === 'dark';
-      return window.matchMedia('(prefers-color-scheme: dark)').matches;
+      // Default to light theme if no preference is saved
+      return false;
     }
     return false;
   });
@@ -182,6 +197,93 @@ export default function App() {
     const now = new Date();
     return now.toTimeString().slice(0, 5);
   };
+
+  const handleClockInOut = () => {
+    const todayIndex = new Date().getDay();
+    const todayRecord = records[todayIndex];
+    const currentTime = getCurrentTime();
+    
+    const newRecords = [...records];
+    const updatedRecord = { ...todayRecord };
+    
+    if (!todayRecord.timeIn || (todayRecord.timeIn && todayRecord.timeOut)) {
+      // Clock In
+      updatedRecord.timeIn = currentTime;
+      if (todayRecord.timeIn && todayRecord.timeOut) {
+        updatedRecord.timeOut = '';
+        updatedRecord.lunchStart = '';
+        updatedRecord.lunchEnd = '';
+      }
+      if (!todayRecord.date) {
+        const today = new Date();
+        updatedRecord.date = `${(today.getMonth() + 1).toString().padStart(2, '0')}/${today.getDate().toString().padStart(2, '0')}`;
+      }
+    } else if (!todayRecord.timeOut) {
+      // Clock Out
+      updatedRecord.timeOut = currentTime;
+    }
+    
+    newRecords[todayIndex] = updatedRecord;
+    setRecords(newRecords);
+  };
+
+  // Web Notifications for Shift
+  useEffect(() => {
+    if (!shiftSettings.enabled) return;
+
+    if (Notification.permission === 'default') {
+      Notification.requestPermission();
+    }
+
+    const checkShiftTimes = () => {
+      if (Notification.permission !== 'granted') return;
+
+      const now = new Date();
+      const currentTimeStr = now.toTimeString().slice(0, 5);
+      const todayIndex = now.getDay();
+      const todayRecord = records[todayIndex];
+      const todayDateStr = now.toISOString().split('T')[0];
+
+      // Check Clock In
+      if (currentTimeStr === shiftSettings.startTime && !todayRecord.timeIn) {
+        const notifKey = `notif_in_${todayDateStr}`;
+        if (!localStorage.getItem(notifKey)) {
+          new Notification('Time to Clock In!', { body: `Your shift starts at ${shiftSettings.startTime}.` });
+          localStorage.setItem(notifKey, 'true');
+        }
+      }
+
+      // Check Lunch Start
+      if (currentTimeStr === shiftSettings.lunchStart && todayRecord.timeIn && !todayRecord.lunchStart) {
+        const notifKey = `notif_lunch_start_${todayDateStr}`;
+        if (!localStorage.getItem(notifKey)) {
+          new Notification('Time for Lunch!', { body: `Your lunch starts at ${shiftSettings.lunchStart}.` });
+          localStorage.setItem(notifKey, 'true');
+        }
+      }
+
+      // Check Lunch End
+      if (currentTimeStr === shiftSettings.lunchEnd && todayRecord.lunchStart && !todayRecord.lunchEnd) {
+        const notifKey = `notif_lunch_end_${todayDateStr}`;
+        if (!localStorage.getItem(notifKey)) {
+          new Notification('Lunch is over!', { body: `Time to clock back in from lunch at ${shiftSettings.lunchEnd}.` });
+          localStorage.setItem(notifKey, 'true');
+        }
+      }
+
+      // Check Clock Out
+      if (currentTimeStr === shiftSettings.endTime && todayRecord.timeIn && !todayRecord.timeOut) {
+        const notifKey = `notif_out_${todayDateStr}`;
+        if (!localStorage.getItem(notifKey)) {
+          new Notification('Time to Clock Out!', { body: `Your shift ends at ${shiftSettings.endTime}.` });
+          localStorage.setItem(notifKey, 'true');
+        }
+      }
+    };
+
+    const interval = setInterval(checkShiftTimes, 30000); // Check every 30s
+    return () => clearInterval(interval);
+  }, [shiftSettings, records]);
 
   // Load signature into canvas on mount if it's a data URL
   useEffect(() => {
@@ -733,23 +835,7 @@ export default function App() {
                 </div>
               )}
               <div className="flex flex-wrap justify-end gap-2 w-full sm:w-auto">
-                <button
-                  onClick={() => setIsDarkMode(!isDarkMode)}
-                  className="flex-1 sm:flex-none flex justify-center items-center gap-2 px-3 py-1.5 text-sm font-medium text-gray-700 dark:text-slate-200 bg-white dark:bg-slate-800 border border-gray-300 dark:border-slate-600 rounded-lg hover:bg-gray-50 dark:hover:bg-slate-700 transition-colors"
-                  title={isDarkMode ? "Switch to Light Mode" : "Switch to Dark Mode"}
-                >
-                  {isDarkMode ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
-                  <span className="sr-only sm:not-sr-only sm:inline">{isDarkMode ? 'Light' : 'Dark'}</span>
-                </button>
-                {user ? (
-                  <button
-                    onClick={handleLogout}
-                    className="flex-1 sm:flex-none flex justify-center items-center gap-2 px-3 py-1.5 text-sm font-medium text-red-700 dark:text-red-400 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-900/50 rounded-lg hover:bg-red-100 dark:hover:bg-red-900/40 transition-colors"
-                  >
-                    <LogOut className="w-4 h-4" />
-                    Logout
-                  </button>
-                ) : (
+                {!user && (
                   <button
                     onClick={() => setShowAuthModal(true)}
                     className="flex-1 sm:flex-none flex justify-center items-center gap-2 px-3 py-1.5 text-sm font-medium text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-200 dark:border-indigo-800/50 rounded-lg hover:bg-indigo-100 dark:hover:bg-indigo-900/40 transition-colors"
@@ -759,18 +845,18 @@ export default function App() {
                   </button>
                 )}
                 <button
+                  onClick={() => setIsSettingsOpen(true)}
+                  className="flex-1 sm:flex-none flex justify-center items-center gap-2 px-3 py-1.5 text-sm font-medium text-gray-700 dark:text-slate-200 bg-white dark:bg-slate-800 border border-gray-300 dark:border-slate-600 rounded-lg hover:bg-gray-50 dark:hover:bg-slate-700 transition-colors"
+                >
+                  <Settings className="w-4 h-4" />
+                  Settings
+                </button>
+                <button
                   onClick={openHistory}
                   className="flex-1 sm:flex-none flex justify-center items-center gap-2 px-3 py-1.5 text-sm font-medium text-gray-700 dark:text-slate-200 bg-white dark:bg-slate-800 border border-gray-300 dark:border-slate-600 rounded-lg hover:bg-gray-50 dark:hover:bg-slate-700 transition-colors"
                 >
                   <History className="w-4 h-4" />
                   History
-                </button>
-                <button
-                  onClick={handleClear}
-                  className="flex-1 sm:flex-none flex justify-center items-center gap-2 px-3 py-1.5 text-sm font-medium text-gray-700 dark:text-slate-200 bg-white dark:bg-slate-800 border border-gray-300 dark:border-slate-600 rounded-lg hover:bg-gray-50 dark:hover:bg-slate-700 transition-colors"
-                >
-                  <RefreshCw className="w-4 h-4" />
-                  Clear
                 </button>
                 <button
                   onClick={handlePrint}
@@ -929,6 +1015,21 @@ export default function App() {
                   </>
                 )}
               </div>
+              
+              {/* Clock In/Out Button */}
+              <div className="mt-4 print:hidden pdf:hidden flex justify-center">
+                <button
+                  onClick={handleClockInOut}
+                  className="flex items-center gap-2 px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-full font-medium shadow-md hover:shadow-lg transition-all active:scale-95"
+                >
+                  <Clock className="w-5 h-5" />
+                  {(() => {
+                    const todayRecord = records[new Date().getDay()];
+                    if (!todayRecord.timeIn || (todayRecord.timeIn && todayRecord.timeOut)) return "Clock In";
+                    return "Clock Out";
+                  })()}
+                </button>
+              </div>
             </div>
 
             {/* Employee Info */}
@@ -937,7 +1038,7 @@ export default function App() {
                 <label className="block text-sm font-medium text-gray-700 dark:text-slate-300">Name</label>
                 <input
                   type="text"
-                  value={name}
+                  value={name || ''}
                   onChange={handleNameChange}
                   className="block w-full border-0 border-b-2 border-gray-200 dark:border-slate-700 focus:border-indigo-600 dark:focus:border-indigo-400 focus:ring-0 px-0 py-0.5 text-xl sm:text-2xl print:text-lg pdf:text-lg print:border-none pdf:border-none print:p-0 pdf:p-0 font-bold transition-colors bg-transparent text-gray-900 dark:text-white placeholder-gray-300 dark:placeholder-slate-600"
                   placeholder="John Doe"
@@ -947,7 +1048,7 @@ export default function App() {
                 <label className="block text-sm font-medium text-gray-700 dark:text-slate-300">Week Of</label>
                 <input
                   type="date"
-                  value={weekOf}
+                  value={weekOf || ''}
                   onChange={handleWeekOfChange}
                   className="block w-full border-0 border-b-2 border-gray-200 dark:border-slate-700 focus:border-indigo-600 dark:focus:border-indigo-400 focus:ring-0 px-0 py-0.5 text-xl sm:text-2xl print:text-lg pdf:text-lg print:border-none pdf:border-none print:p-0 pdf:p-0 font-bold transition-colors bg-transparent text-gray-900 dark:text-white"
                 />
@@ -965,7 +1066,7 @@ export default function App() {
                     <h3 className="font-semibold text-gray-900 dark:text-white">{record.day}</h3>
                     <input
                       type="date"
-                      value={record.date}
+                      value={record.date || ''}
                       onChange={(e) => handleRecordChange(index, 'date', e.target.value)}
                       className="text-sm border-gray-300 dark:border-slate-600 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 py-1 px-2 bg-white/50 dark:bg-slate-800/50 text-gray-900 dark:text-white w-36"
                     />
@@ -990,7 +1091,7 @@ export default function App() {
                       </div>
                       <input
                         type="time"
-                        value={record.timeIn}
+                        value={record.timeIn || ''}
                         onChange={(e) => handleRecordChange(index, 'timeIn', e.target.value)}
                         className={`text-sm rounded-md shadow-sm py-1.5 px-2 bg-white/50 dark:bg-slate-800/50 text-gray-900 dark:text-white ${errors.timeIn ? 'border-red-500 focus:ring-red-500' : 'border-gray-300 dark:border-slate-600 focus:ring-indigo-500'}`}
                       />
@@ -1013,7 +1114,7 @@ export default function App() {
                       </div>
                       <input
                         type="time"
-                        value={record.timeOut}
+                        value={record.timeOut || ''}
                         onChange={(e) => handleRecordChange(index, 'timeOut', e.target.value)}
                         className={`text-sm rounded-md shadow-sm py-1.5 px-2 bg-white/50 dark:bg-slate-800/50 text-gray-900 dark:text-white ${errors.timeOut ? 'border-red-500 focus:ring-red-500' : 'border-gray-300 dark:border-slate-600 focus:ring-indigo-500'}`}
                       />
@@ -1036,7 +1137,7 @@ export default function App() {
                       </div>
                       <input
                         type="time"
-                        value={record.lunchStart}
+                        value={record.lunchStart || ''}
                         onChange={(e) => handleRecordChange(index, 'lunchStart', e.target.value)}
                         className={`text-sm rounded-md shadow-sm py-1.5 px-2 bg-white/50 dark:bg-slate-800/50 text-gray-900 dark:text-white ${errors.lunchStart ? 'border-red-500 focus:ring-red-500' : 'border-gray-300 dark:border-slate-600 focus:ring-indigo-500'}`}
                       />
@@ -1059,7 +1160,7 @@ export default function App() {
                       </div>
                       <input
                         type="time"
-                        value={record.lunchEnd}
+                        value={record.lunchEnd || ''}
                         onChange={(e) => handleRecordChange(index, 'lunchEnd', e.target.value)}
                         className={`text-sm rounded-md shadow-sm py-1.5 px-2 bg-white/50 dark:bg-slate-800/50 text-gray-900 dark:text-white ${errors.lunchEnd ? 'border-red-500 focus:ring-red-500' : 'border-gray-300 dark:border-slate-600 focus:ring-indigo-500'}`}
                       />
@@ -1073,7 +1174,7 @@ export default function App() {
                       <label className="text-[10px] font-medium text-gray-500 dark:text-slate-400 uppercase tracking-wider mb-0.5">Total Hrs</label>
                       <input
                         type="text"
-                        value={record.totalHours}
+                        value={record.totalHours || ''}
                         onChange={(e) => handleRecordChange(index, 'totalHours', e.target.value)}
                         className={`w-full text-center text-sm font-bold rounded-md shadow-sm py-1.5 px-1 bg-indigo-50/50 dark:bg-indigo-900/20 text-indigo-700 dark:text-indigo-300 ${errors.totalHours ? 'border-red-500 focus:ring-red-500' : 'border-indigo-200 dark:border-indigo-800/50 focus:ring-indigo-500 dark:focus:ring-indigo-400'}`}
                         placeholder="0.00"
@@ -1084,7 +1185,7 @@ export default function App() {
                       <label className="text-[10px] font-medium text-gray-500 dark:text-slate-400 uppercase tracking-wider mb-0.5">Notes</label>
                       <input
                         type="text"
-                        value={record.notes}
+                        value={record.notes || ''}
                         onChange={(e) => handleRecordChange(index, 'notes', e.target.value)}
                         className="w-full text-sm rounded-md shadow-sm border-gray-300 dark:border-slate-600 focus:ring-indigo-500 focus:border-indigo-500 py-1.5 px-2 bg-gray-50/50 dark:bg-slate-800/30 text-gray-900 dark:text-white"
                         placeholder="Add notes..."
@@ -1118,7 +1219,7 @@ export default function App() {
                         <div className="text-sm print:text-[10px] pdf:text-[10px] font-medium text-gray-900 dark:text-white mb-1 ml-1 print:mb-0 pdf:mb-0 print:ml-0 pdf:ml-0">{record.day}</div>
                         <input
                           type="date"
-                          value={record.date}
+                          value={record.date || ''}
                           onChange={(e) => handleRecordChange(index, 'date', e.target.value)}
                           className="w-full border-gray-300 dark:border-slate-600 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 text-xl print:text-[10px] pdf:text-[10px] print:border-none pdf:border-none print:bg-transparent pdf:bg-transparent print:shadow-none pdf:shadow-none print:p-0 pdf:p-0 print:min-w-0 pdf:min-w-0 font-bold py-0 px-0 bg-transparent text-gray-900 dark:text-white"
                         />
@@ -1136,7 +1237,7 @@ export default function App() {
                         </div>
                         <input
                           type="time"
-                          value={record.timeIn}
+                          value={record.timeIn || ''}
                           onChange={(e) => handleRecordChange(index, 'timeIn', e.target.value)}
                           className={`w-full rounded-md shadow-sm text-xl print:text-[11px] pdf:text-[11px] print:border-none pdf:border-none print:bg-transparent pdf:bg-transparent print:shadow-none pdf:shadow-none print:p-0 pdf:p-0 print:min-w-0 pdf:min-w-0 font-bold py-0 px-0 bg-transparent text-gray-900 dark:text-white ${errors.timeIn ? 'border-red-500 focus:ring-red-500 focus:border-red-500' : 'border-gray-300 dark:border-slate-600 focus:ring-indigo-500 focus:border-indigo-500'}`}
                         />
@@ -1155,7 +1256,7 @@ export default function App() {
                         </div>
                         <input
                           type="time"
-                          value={record.lunchStart}
+                          value={record.lunchStart || ''}
                           onChange={(e) => handleRecordChange(index, 'lunchStart', e.target.value)}
                           className={`w-full rounded-md shadow-sm text-xl print:text-[11px] pdf:text-[11px] print:border-none pdf:border-none print:bg-transparent pdf:bg-transparent print:shadow-none pdf:shadow-none print:p-0 pdf:p-0 print:min-w-0 pdf:min-w-0 font-bold py-0 px-0 bg-transparent text-gray-900 dark:text-white ${errors.lunchStart ? 'border-red-500 focus:ring-red-500 focus:border-red-500' : 'border-gray-300 dark:border-slate-600 focus:ring-indigo-500 focus:border-indigo-500'}`}
                         />
@@ -1174,7 +1275,7 @@ export default function App() {
                         </div>
                         <input
                           type="time"
-                          value={record.lunchEnd}
+                          value={record.lunchEnd || ''}
                           onChange={(e) => handleRecordChange(index, 'lunchEnd', e.target.value)}
                           className={`w-full rounded-md shadow-sm text-xl print:text-[11px] pdf:text-[11px] print:border-none pdf:border-none print:bg-transparent pdf:bg-transparent print:shadow-none pdf:shadow-none print:p-0 pdf:p-0 print:min-w-0 pdf:min-w-0 font-bold py-0 px-0 bg-transparent text-gray-900 dark:text-white ${errors.lunchEnd ? 'border-red-500 focus:ring-red-500 focus:border-red-500' : 'border-gray-300 dark:border-slate-600 focus:ring-indigo-500 focus:border-indigo-500'}`}
                         />
@@ -1193,7 +1294,7 @@ export default function App() {
                         </div>
                         <input
                           type="time"
-                          value={record.timeOut}
+                          value={record.timeOut || ''}
                           onChange={(e) => handleRecordChange(index, 'timeOut', e.target.value)}
                           className={`w-full rounded-md shadow-sm text-xl print:text-[11px] pdf:text-[11px] print:border-none pdf:border-none print:bg-transparent pdf:bg-transparent print:shadow-none pdf:shadow-none print:p-0 pdf:p-0 print:min-w-0 pdf:min-w-0 font-bold py-0 px-0 bg-transparent text-gray-900 dark:text-white ${errors.timeOut ? 'border-red-500 focus:ring-red-500 focus:border-red-500' : 'border-gray-300 dark:border-slate-600 focus:ring-indigo-500 focus:border-indigo-500'}`}
                         />
@@ -1203,7 +1304,7 @@ export default function App() {
                         <div className="h-6 print:hidden pdf:hidden"></div>
                         <input
                           type="text"
-                          value={record.totalHours}
+                          value={record.totalHours || ''}
                           onChange={(e) => handleRecordChange(index, 'totalHours', e.target.value)}
                           className={`w-16 print:w-full pdf:w-full rounded-md shadow-sm text-2xl print:text-[11px] pdf:text-[11px] print:border-none pdf:border-none print:bg-transparent pdf:bg-transparent print:shadow-none pdf:shadow-none print:p-0 pdf:p-0 print:min-w-0 pdf:min-w-0 font-extrabold py-0 px-0 font-mono bg-indigo-50/50 dark:bg-indigo-900/20 text-indigo-700 dark:text-indigo-300 print:text-gray-900 pdf:text-gray-900 text-center ${errors.totalHours ? 'border-red-500 focus:ring-red-500 focus:border-red-500' : 'border-gray-300 dark:border-slate-600 focus:ring-indigo-500 focus:border-indigo-500'}`}
                           placeholder="0.00"
@@ -1214,7 +1315,7 @@ export default function App() {
                         <div className="h-6 print:hidden pdf:hidden"></div>
                         <input
                           type="text"
-                          value={record.notes}
+                          value={record.notes || ''}
                           onChange={(e) => handleRecordChange(index, 'notes', e.target.value)}
                           className="w-full border-gray-300 dark:border-slate-600 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 text-xl print:text-[10px] pdf:text-[10px] print:border-none pdf:border-none print:bg-transparent pdf:bg-transparent print:shadow-none pdf:shadow-none print:p-0 pdf:p-0 print:min-w-0 pdf:min-w-0 font-bold py-0 px-0 bg-transparent text-gray-900 dark:text-white"
                           placeholder="..."
@@ -1253,7 +1354,7 @@ export default function App() {
                   <label className="block text-sm font-medium text-gray-700 dark:text-slate-300">Date</label>
                   <input
                     type="date"
-                    value={date}
+                    value={date || ''}
                     onChange={(e) => setDate(e.target.value)}
                     className="block w-full border-0 border-b-2 border-gray-200 dark:border-slate-700 print:border-gray-800 pdf:border-gray-800 focus:border-indigo-600 dark:focus:border-indigo-400 focus:ring-0 px-0 py-2 print:py-0 pdf:py-0 text-base sm:text-lg print:text-sm pdf:text-sm transition-colors bg-transparent text-gray-900 dark:text-white"
                   />
@@ -1267,7 +1368,7 @@ export default function App() {
                     <span className="absolute left-0 top-1/2 -translate-y-1/2 text-gray-500 dark:text-slate-400 font-bold print:text-sm pdf:text-sm">$</span>
                     <input
                       type="number"
-                      value={hourlyRate}
+                      value={hourlyRate || ''}
                       onChange={(e) => setHourlyRate(e.target.value)}
                       className="w-24 sm:w-32 print:w-24 pdf:w-24 text-right text-lg sm:text-xl print:text-sm pdf:text-sm font-bold text-gray-800 dark:text-white bg-transparent border-b-2 border-gray-300 dark:border-slate-600 print:border-gray-800 pdf:border-gray-800 focus:border-indigo-600 dark:focus:border-indigo-400 focus:ring-0 px-0 py-1 print:py-0 pdf:py-0 pl-4"
                       placeholder="0.00"
@@ -1280,7 +1381,7 @@ export default function App() {
                   <span className="text-base sm:text-lg print:text-sm pdf:text-sm font-medium text-gray-700 dark:text-slate-300">Total Hours:</span>
                   <input
                     type="text"
-                    value={totalHours}
+                    value={totalHours || ''}
                     onChange={(e) => setTotalHours(e.target.value)}
                     className={`w-24 sm:w-32 print:w-24 pdf:w-24 text-right text-xl sm:text-2xl print:text-base pdf:text-base font-bold text-indigo-600 dark:text-indigo-400 print:text-gray-900 pdf:text-gray-900 bg-transparent border-b-2 focus:ring-0 px-0 py-1 print:py-0 pdf:py-0 ${totalHours && isNaN(Number(totalHours)) ? 'border-red-500 focus:border-red-500' : 'border-indigo-200 dark:border-indigo-800/50 print:border-gray-800 pdf:border-gray-800 focus:border-indigo-600 dark:focus:border-indigo-400'}`}
                     placeholder="0.00"
@@ -1356,6 +1457,143 @@ export default function App() {
                 >
                   Send Email
                 </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {isSettingsOpen && (
+          <div className="fixed inset-0 bg-black/50 dark:bg-slate-900/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+            <div className="bg-white/90 dark:bg-slate-800/90 backdrop-blur-xl rounded-2xl shadow-2xl max-w-md w-full flex flex-col border border-white/20 dark:border-slate-700">
+              <div className="flex items-center justify-between p-4 sm:p-6 border-b border-gray-100 dark:border-slate-700/50">
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-white flex items-center gap-2">
+                  <Settings className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
+                  Settings
+                </h3>
+                <button
+                  onClick={() => setIsSettingsOpen(false)}
+                  className="p-2 text-gray-400 dark:text-slate-500 hover:text-gray-600 dark:hover:text-slate-300 hover:bg-gray-100 dark:hover:bg-slate-800 rounded-lg transition-colors"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+              
+              <div className="p-4 sm:p-6 space-y-6">
+                <div>
+                  <h4 className="text-sm font-medium text-gray-900 dark:text-white mb-4">Shift Configuration</h4>
+                  <div className="space-y-4">
+                    <label className="flex items-center gap-3 cursor-pointer">
+                      <div className="relative">
+                        <input 
+                          type="checkbox" 
+                          className="sr-only" 
+                          checked={shiftSettings.enabled}
+                          onChange={(e) => {
+                            const newSettings = { ...shiftSettings, enabled: e.target.checked };
+                            setShiftSettings(newSettings);
+                            localStorage.setItem('shift_settings', JSON.stringify(newSettings));
+                            if (e.target.checked && Notification.permission === 'default') {
+                              Notification.requestPermission();
+                            }
+                          }}
+                        />
+                        <div className={`block w-10 h-6 rounded-full transition-colors ${shiftSettings.enabled ? 'bg-indigo-500' : 'bg-gray-300 dark:bg-slate-600'}`}></div>
+                        <div className={`absolute left-1 top-1 bg-white w-4 h-4 rounded-full transition-transform ${shiftSettings.enabled ? 'translate-x-4' : ''}`}></div>
+                      </div>
+                      <span className="text-sm font-medium text-gray-700 dark:text-slate-300">Enable Shift Notifications</span>
+                    </label>
+                    
+                    <div className={`grid grid-cols-2 gap-4 transition-opacity ${shiftSettings.enabled ? 'opacity-100' : 'opacity-50 pointer-events-none'}`}>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-500 dark:text-slate-400 mb-1">Start Time</label>
+                        <input 
+                          type="time" 
+                          value={shiftSettings.startTime || ''}
+                          onChange={(e) => {
+                            const newSettings = { ...shiftSettings, startTime: e.target.value };
+                            setShiftSettings(newSettings);
+                            localStorage.setItem('shift_settings', JSON.stringify(newSettings));
+                          }}
+                          className="w-full px-3 py-2 border border-gray-300 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-indigo-500 bg-white dark:bg-slate-900 text-gray-900 dark:text-white"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-500 dark:text-slate-400 mb-1">Lunch Start</label>
+                        <input 
+                          type="time" 
+                          value={shiftSettings.lunchStart || ''}
+                          onChange={(e) => {
+                            const newSettings = { ...shiftSettings, lunchStart: e.target.value };
+                            setShiftSettings(newSettings);
+                            localStorage.setItem('shift_settings', JSON.stringify(newSettings));
+                          }}
+                          className="w-full px-3 py-2 border border-gray-300 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-indigo-500 bg-white dark:bg-slate-900 text-gray-900 dark:text-white"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-500 dark:text-slate-400 mb-1">Lunch End</label>
+                        <input 
+                          type="time" 
+                          value={shiftSettings.lunchEnd || ''}
+                          onChange={(e) => {
+                            const newSettings = { ...shiftSettings, lunchEnd: e.target.value };
+                            setShiftSettings(newSettings);
+                            localStorage.setItem('shift_settings', JSON.stringify(newSettings));
+                          }}
+                          className="w-full px-3 py-2 border border-gray-300 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-indigo-500 bg-white dark:bg-slate-900 text-gray-900 dark:text-white"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-500 dark:text-slate-400 mb-1">End Time</label>
+                        <input 
+                          type="time" 
+                          value={shiftSettings.endTime || ''}
+                          onChange={(e) => {
+                            const newSettings = { ...shiftSettings, endTime: e.target.value };
+                            setShiftSettings(newSettings);
+                            localStorage.setItem('shift_settings', JSON.stringify(newSettings));
+                          }}
+                          className="w-full px-3 py-2 border border-gray-300 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-indigo-500 bg-white dark:bg-slate-900 text-gray-900 dark:text-white"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                
+                <div className="pt-6 border-t border-gray-100 dark:border-slate-700/50">
+                  <h4 className="text-sm font-medium text-gray-900 dark:text-white mb-4">General Actions</h4>
+                  <div className="flex flex-col gap-3">
+                    {user && (
+                      <button
+                        onClick={() => {
+                          setIsSettingsOpen(false);
+                          handleLogout();
+                        }}
+                        className="flex justify-center items-center gap-2 px-4 py-2 text-sm font-medium text-red-700 dark:text-red-400 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-900/50 rounded-lg hover:bg-red-100 dark:hover:bg-red-900/40 transition-colors w-full"
+                      >
+                        <LogOut className="w-4 h-4" />
+                        Logout ({user.email})
+                      </button>
+                    )}
+                    <button
+                      onClick={() => setIsDarkMode(!isDarkMode)}
+                      className="flex justify-center items-center gap-2 px-4 py-2 text-sm font-medium text-gray-700 dark:text-slate-200 bg-white dark:bg-slate-800 border border-gray-300 dark:border-slate-600 rounded-lg hover:bg-gray-50 dark:hover:bg-slate-700 transition-colors w-full"
+                    >
+                      {isDarkMode ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+                      {isDarkMode ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+                    </button>
+                    <button
+                      onClick={() => {
+                        setIsSettingsOpen(false);
+                        handleClear();
+                      }}
+                      className="flex justify-center items-center gap-2 px-4 py-2 text-sm font-medium text-red-700 dark:text-red-400 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-900/50 rounded-lg hover:bg-red-100 dark:hover:bg-red-900/40 transition-colors w-full"
+                    >
+                      <RefreshCw className="w-4 h-4" />
+                      Clear Timesheet Data
+                    </button>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
