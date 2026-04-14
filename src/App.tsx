@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Mail, Printer, Calculator, RefreshCw, Save, Loader2, History, Search, X, ChevronRight, Trash2, CheckCircle2, ChevronDown, User, LogOut, Moon, Sun, Clock, Settings } from 'lucide-react';
+import { Mail, Printer, Calculator, RefreshCw, Save, Loader2, History, Search, X, ChevronRight, Trash2, CheckCircle2, ChevronDown, User, LogOut, Moon, Sun, Clock, Settings, Check } from 'lucide-react';
 import SignatureCanvas from 'react-signature-canvas';
 import { motion, AnimatePresence } from 'motion/react';
 import jsPDF from 'jspdf';
@@ -133,6 +133,7 @@ export default function App() {
   });
 
   const sigCanvas = useRef<SignatureCanvas>(null);
+  const emailContainerRef = useRef<HTMLDivElement>(null);
 
   // Apply dark mode class to html element
   useEffect(() => {
@@ -144,6 +145,20 @@ export default function App() {
       localStorage.setItem('theme', 'light');
     }
   }, [isDarkMode]);
+
+  // Handle clicks outside email dropdown
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (emailContainerRef.current && !emailContainerRef.current.contains(event.target as Node)) {
+        setShowEmailHistory(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, []);
 
   // Listen for Firebase Auth state changes
   useEffect(() => {
@@ -825,7 +840,7 @@ export default function App() {
       <div id="timesheet-content" className="max-w-5xl print:max-w-full pdf:max-w-full mx-auto space-y-4 sm:space-y-6">
         
         {/* Header Actions - Hidden when printing */}
-        <div className="flex flex-col md:flex-row justify-between items-start gap-4 bg-white/40 dark:bg-slate-800/40 backdrop-blur-md p-4 rounded-xl shadow-sm border border-white/50 dark:border-slate-700/50 print:hidden pdf:hidden">
+        <div className="relative z-50 flex flex-col md:flex-row justify-between items-start gap-4 bg-white/40 dark:bg-slate-800/40 backdrop-blur-md p-4 rounded-xl shadow-sm border border-white/50 dark:border-slate-700/50 print:hidden pdf:hidden">
           <div className="flex items-center gap-3 text-indigo-600 dark:text-indigo-400">
             <div className="bg-indigo-100 dark:bg-indigo-900/50 p-2 rounded-lg">
               <Clock className="w-6 h-6" />
@@ -888,14 +903,13 @@ export default function App() {
             </div>
             
             <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full md:w-auto">
-              <div className="relative w-full sm:w-72">
+              <div className="relative w-full sm:w-72" ref={emailContainerRef}>
                 <input
                   type="text"
                   placeholder="Manager's Email(s)"
                   value={recipientEmail}
                   onChange={(e) => setRecipientEmail(e.target.value)}
                   onFocus={() => setShowEmailHistory(true)}
-                  onBlur={() => setTimeout(() => setShowEmailHistory(false), 200)}
                   className="px-3 py-2 text-sm sm:text-base border border-gray-300 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 w-full pr-8 bg-white/50 dark:bg-slate-800/50 text-gray-900 dark:text-white"
                 />
                 <button 
@@ -905,34 +919,82 @@ export default function App() {
                   <ChevronDown className="w-4 h-4" />
                 </button>
                 
-                {showEmailHistory && emailHistory.length > 0 && (
-                  <div className="absolute top-full left-0 right-0 mt-1 bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-lg shadow-lg z-50 max-h-48 overflow-y-auto">
-                    {emailHistory.map(email => (
-                      <div 
-                        key={email}
-                        className="px-3 py-2 text-sm hover:bg-gray-50 dark:hover:bg-slate-700 cursor-pointer flex justify-between items-center text-gray-900 dark:text-white"
-                        onClick={() => {
-                          const currentEmails = recipientEmail.split(',').map(e => e.trim()).filter(Boolean);
-                          if (!currentEmails.includes(email)) {
-                            setRecipientEmail(currentEmails.length > 0 ? `${recipientEmail}, ${email}` : email);
+                {showEmailHistory && (
+                  <div className="absolute top-full left-0 right-0 mt-1 bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-lg shadow-lg z-50 max-h-64 flex flex-col overflow-hidden">
+                    <div className="p-2 border-b border-gray-100 dark:border-slate-700">
+                      <input
+                        type="email"
+                        placeholder="Add new email & press Enter..."
+                        className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-slate-600 rounded focus:ring-2 focus:ring-indigo-500 bg-gray-50 dark:bg-slate-900 text-gray-900 dark:text-white"
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            const newEmail = e.currentTarget.value.trim();
+                            if (newEmail && newEmail.includes('@')) {
+                              if (!emailHistory.includes(newEmail)) {
+                                const newHistory = [newEmail, ...emailHistory].slice(0, 20);
+                                setEmailHistory(newHistory);
+                                localStorage.setItem('email_history', JSON.stringify(newHistory));
+                              }
+                              
+                              const currentEmails = recipientEmail.split(',').map(e => e.trim()).filter(Boolean);
+                              if (!currentEmails.includes(newEmail)) {
+                                setRecipientEmail(currentEmails.length > 0 ? `${recipientEmail}, ${newEmail}` : newEmail);
+                              }
+                              e.currentTarget.value = '';
+                            }
                           }
-                          setShowEmailHistory(false);
                         }}
-                      >
-                        <span className="truncate">{email}</span>
-                        <button 
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            const newHistory = emailHistory.filter(e => e !== email);
-                            setEmailHistory(newHistory);
-                            localStorage.setItem('email_history', JSON.stringify(newHistory));
-                          }}
-                          className="text-gray-400 dark:text-slate-500 hover:text-red-500 dark:hover:text-red-400 ml-2"
-                        >
-                          <X className="w-3 h-3" />
-                        </button>
-                      </div>
-                    ))}
+                      />
+                    </div>
+                    <div className="overflow-y-auto">
+                      {emailHistory.length === 0 ? (
+                        <div className="px-3 py-4 text-sm text-center text-gray-500 dark:text-slate-400">
+                          No saved emails
+                        </div>
+                      ) : (
+                        emailHistory.map(email => {
+                          const isSelected = recipientEmail.split(',').map(e => e.trim()).includes(email);
+                          return (
+                            <div 
+                              key={email}
+                              className="px-3 py-2 text-sm hover:bg-gray-50 dark:hover:bg-slate-700 cursor-pointer flex justify-between items-center text-gray-900 dark:text-white"
+                              onClick={() => {
+                                const currentEmails = recipientEmail.split(',').map(e => e.trim()).filter(Boolean);
+                                if (isSelected) {
+                                  setRecipientEmail(currentEmails.filter(e => e !== email).join(', '));
+                                } else {
+                                  setRecipientEmail(currentEmails.length > 0 ? `${currentEmails.join(', ')}, ${email}` : email);
+                                }
+                              }}
+                            >
+                              <div className="flex items-center gap-2 truncate">
+                                <div className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 ${isSelected ? 'bg-indigo-500 border-indigo-500' : 'border-gray-300 dark:border-slate-600'}`}>
+                                  {isSelected && <Check className="w-3 h-3 text-white" />}
+                                </div>
+                                <span className="truncate">{email}</span>
+                              </div>
+                              <button 
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  const newHistory = emailHistory.filter(e => e !== email);
+                                  setEmailHistory(newHistory);
+                                  localStorage.setItem('email_history', JSON.stringify(newHistory));
+                                  
+                                  if (isSelected) {
+                                    const currentEmails = recipientEmail.split(',').map(e => e.trim()).filter(Boolean);
+                                    setRecipientEmail(currentEmails.filter(e => e !== email).join(', '));
+                                  }
+                                }}
+                                className="text-gray-400 dark:text-slate-500 hover:text-red-500 dark:hover:text-red-400 ml-2 flex-shrink-0"
+                              >
+                                <X className="w-3 h-3" />
+                              </button>
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
                   </div>
                 )}
               </div>
