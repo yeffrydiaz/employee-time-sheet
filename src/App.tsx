@@ -107,12 +107,22 @@ export default function App() {
   const [newCompanyInput, setNewCompanyInput] = useState('');
   const [emailHistory, setEmailHistory] = useState<string[]>(() => {
     try {
-      const saved = localStorage.getItem('email_history');
+      const saved = localStorage.getItem(`email_history_${initialCompany}`);
       return saved ? JSON.parse(saved) : [];
     } catch (e) {
       return [];
     }
   });
+
+  // Load company-specific email history when company changes
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(`email_history_${companyName}`);
+      setEmailHistory(saved ? JSON.parse(saved) : []);
+    } catch (e) {
+      setEmailHistory([]);
+    }
+  }, [companyName]);
   const [showEmailHistory, setShowEmailHistory] = useState(false);
 
   // Auth states
@@ -597,7 +607,7 @@ export default function App() {
         const currentEmails = recipientEmail.split(',').map(e => e.trim()).filter(Boolean);
         const newHistory = [...new Set([...currentEmails, ...emailHistory])].slice(0, 20); // Keep last 20
         setEmailHistory(newHistory);
-        localStorage.setItem('email_history', JSON.stringify(newHistory));
+        localStorage.setItem(`email_history_${companyName}`, JSON.stringify(newHistory));
 
         let bodyText = `${companyName || 'Employee'} Time Sheet\n`;
         bodyText += `===================\n\n`;
@@ -934,7 +944,7 @@ export default function App() {
                               if (!emailHistory.includes(newEmail)) {
                                 const newHistory = [newEmail, ...emailHistory].slice(0, 20);
                                 setEmailHistory(newHistory);
-                                localStorage.setItem('email_history', JSON.stringify(newHistory));
+                                localStorage.setItem(`email_history_${companyName}`, JSON.stringify(newHistory));
                               }
                               
                               const currentEmails = recipientEmail.split(',').map(e => e.trim()).filter(Boolean);
@@ -979,7 +989,7 @@ export default function App() {
                                   e.stopPropagation();
                                   const newHistory = emailHistory.filter(e => e !== email);
                                   setEmailHistory(newHistory);
-                                  localStorage.setItem('email_history', JSON.stringify(newHistory));
+                                  localStorage.setItem(`email_history_${companyName}`, JSON.stringify(newHistory));
                                   
                                   if (isSelected) {
                                     const currentEmails = recipientEmail.split(',').map(e => e.trim()).filter(Boolean);
