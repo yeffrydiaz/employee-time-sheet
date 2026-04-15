@@ -223,7 +223,7 @@ export default function App() {
     return now.toTimeString().slice(0, 5);
   };
 
-  const handleClockInOut = () => {
+  const handleTimeAction = (action: 'clockIn' | 'startLunch' | 'endLunch' | 'clockOut') => {
     const todayIndex = new Date().getDay();
     const todayRecord = records[todayIndex];
     const currentTime = getCurrentTime();
@@ -231,8 +231,7 @@ export default function App() {
     const newRecords = [...records];
     const updatedRecord = { ...todayRecord };
     
-    if (!todayRecord.timeIn || (todayRecord.timeIn && todayRecord.timeOut)) {
-      // Clock In
+    if (action === 'clockIn') {
       updatedRecord.timeIn = currentTime;
       if (todayRecord.timeIn && todayRecord.timeOut) {
         updatedRecord.timeOut = '';
@@ -243,8 +242,11 @@ export default function App() {
         const today = new Date();
         updatedRecord.date = `${(today.getMonth() + 1).toString().padStart(2, '0')}/${today.getDate().toString().padStart(2, '0')}`;
       }
-    } else if (!todayRecord.timeOut) {
-      // Clock Out
+    } else if (action === 'startLunch') {
+      updatedRecord.lunchStart = currentTime;
+    } else if (action === 'endLunch') {
+      updatedRecord.lunchEnd = currentTime;
+    } else if (action === 'clockOut') {
       updatedRecord.timeOut = currentTime;
     }
     
@@ -1097,19 +1099,64 @@ export default function App() {
                 )}
               </div>
               
-              {/* Clock In/Out Button */}
-              <div className="mt-4 print:hidden pdf:hidden flex justify-center">
-                <button
-                  onClick={handleClockInOut}
-                  className="flex items-center gap-2 px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-full font-medium shadow-md hover:shadow-lg transition-all active:scale-95"
-                >
-                  <Clock className="w-5 h-5" />
-                  {(() => {
-                    const todayRecord = records[new Date().getDay()];
-                    if (!todayRecord.timeIn || (todayRecord.timeIn && todayRecord.timeOut)) return "Clock In";
-                    return "Clock Out";
-                  })()}
-                </button>
+              {/* Clock In/Out Buttons */}
+              <div className="mt-4 print:hidden pdf:hidden flex flex-wrap justify-center gap-3">
+                {(() => {
+                  const todayRecord = records[new Date().getDay()];
+                  const hasTimeIn = !!todayRecord.timeIn;
+                  const hasLunchStart = !!todayRecord.lunchStart;
+                  const hasLunchEnd = !!todayRecord.lunchEnd;
+                  const hasTimeOut = !!todayRecord.timeOut;
+
+                  const canClockIn = !hasTimeIn || (hasTimeIn && hasTimeOut);
+                  const canStartLunch = hasTimeIn && !hasLunchStart && !hasTimeOut;
+                  const canEndLunch = hasTimeIn && hasLunchStart && !hasLunchEnd && !hasTimeOut;
+                  const canClockOut = hasTimeIn && !hasTimeOut && (!hasLunchStart || hasLunchEnd);
+
+                  return (
+                    <>
+                      {canClockIn && (
+                        <button
+                          onClick={() => handleTimeAction('clockIn')}
+                          className="flex items-center gap-2 px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-full font-medium shadow-md hover:shadow-lg transition-all active:scale-95"
+                        >
+                          <Clock className="w-5 h-5" />
+                          Clock In
+                        </button>
+                      )}
+                      
+                      {canStartLunch && (
+                        <button
+                          onClick={() => handleTimeAction('startLunch')}
+                          className="flex items-center gap-2 px-6 py-2.5 bg-amber-500 hover:bg-amber-600 text-white rounded-full font-medium shadow-md hover:shadow-lg transition-all active:scale-95"
+                        >
+                          <Clock className="w-5 h-5" />
+                          Start Lunch
+                        </button>
+                      )}
+
+                      {canEndLunch && (
+                        <button
+                          onClick={() => handleTimeAction('endLunch')}
+                          className="flex items-center gap-2 px-6 py-2.5 bg-emerald-500 hover:bg-emerald-600 text-white rounded-full font-medium shadow-md hover:shadow-lg transition-all active:scale-95"
+                        >
+                          <Clock className="w-5 h-5" />
+                          End Lunch
+                        </button>
+                      )}
+
+                      {canClockOut && (
+                        <button
+                          onClick={() => handleTimeAction('clockOut')}
+                          className="flex items-center gap-2 px-6 py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-full font-medium shadow-md hover:shadow-lg transition-all active:scale-95"
+                        >
+                          <Clock className="w-5 h-5" />
+                          Clock Out
+                        </button>
+                      )}
+                    </>
+                  );
+                })()}
               </div>
             </div>
 
