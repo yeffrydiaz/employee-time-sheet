@@ -265,10 +265,18 @@ export default function App() {
           });
         });
 
-        const response = await fetch('/api/verify-recaptcha', {
+        const requestBody = {
+          event: {
+            token,
+            expectedAction: action || "LOGIN",
+            siteKey: "6Lc1QcUsAAAAAB7EjZgWtJljysfy7EvkeR1scH8N"
+          }
+        };
+
+        const response = await fetch('https://recaptchaenterprise.googleapis.com/v1/projects/webnow10101/assessments?key=6Lc1QcUsAAAAAB7EjZgWtJljysfy7EvkeR1scH8N', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ token, action })
+          body: JSON.stringify(requestBody)
         });
         
         if (!response.ok) {
