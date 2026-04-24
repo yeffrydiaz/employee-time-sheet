@@ -70,10 +70,10 @@ export default function App() {
     }
   });
   const [name, setName] = useState(savedData?.name || '');
+  const [employeeEmail, setEmployeeEmail] = useState(savedData?.employeeEmail || '');
   const [weekOf, setWeekOf] = useState(savedData?.weekOf || '');
   const [records, setRecords] = useState<DailyRecord[]>(savedData?.records || initialRecords);
   const [totalHours, setTotalHours] = useState('');
-  const [hourlyRate, setHourlyRate] = useState(savedData?.hourlyRate || '');
   const [signature, setSignature] = useState(savedData?.signature || '');
   const [date, setDate] = useState(savedData?.date || '');
   const [recipientEmail, setRecipientEmail] = useState(savedData?.recipientEmail || DEFAULT_EMAIL);
@@ -86,7 +86,7 @@ export default function App() {
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [shiftSettings, setShiftSettings] = useState(() => {
-    const defaultSettings = { startTime: '09:00', lunchStart: '12:00', lunchEnd: '13:00', endTime: '17:00', enabled: false };
+    const defaultSettings = { startTime: '09:00', lunchStart: '12:00', lunchEnd: '13:00', endTime: '17:00', enabled: true };
     try {
       const saved = localStorage.getItem('shift_settings');
       if (saved) {
@@ -321,7 +321,7 @@ export default function App() {
 
   // Save to local storage whenever data changes
   useEffect(() => {
-    const dataToSave = { companyName, name, weekOf, records, signature, date, recipientEmail, hourlyRate, sentLogs };
+    const dataToSave = { companyName, name, employeeEmail, weekOf, records, signature, date, recipientEmail, sentLogs };
     localStorage.setItem(`${STORAGE_KEY_PREFIX}${companyName}`, JSON.stringify(dataToSave));
     setLastSaved(new Date());
     
@@ -359,7 +359,7 @@ export default function App() {
     }
     
     return () => clearTimeout(timer);
-  }, [companyName, name, weekOf, records, signature, date, recipientEmail, hourlyRate, sentLogs]);
+  }, [companyName, name, employeeEmail, weekOf, records, signature, date, recipientEmail, sentLogs]);
 
   // Auto-calculate total hours when records change
   useEffect(() => {
@@ -505,6 +505,27 @@ export default function App() {
   };
 
   const handleSendEmailClick = () => {
+    if (!name?.trim()) {
+      alert("Please enter your name to send the timesheet.");
+      return;
+    }
+
+    const actualEmployeeEmail = user?.email || employeeEmail?.trim();
+    if (!actualEmployeeEmail) {
+      alert("Please enter your email address to send the timesheet.");
+      return;
+    }
+
+    if (!signature) {
+      alert("Please sign the timesheet to send it.");
+      return;
+    }
+
+    if (!recipientEmail?.trim()) {
+      alert("Please enter the manager's email address.");
+      return;
+    }
+
     setShowEmailConfirm(true);
   };
 
@@ -632,31 +653,15 @@ export default function App() {
         });
         
         bodyText += `--------------\n`;
-        bodyText += `Total Weekly Hours: ${totalHours}\n`;
-        
-        const totalWeeklyHoursNum = parseFloat(totalHours) || 0;
-        const rate = parseFloat(hourlyRate) || 0;
-        if (rate > 0 && totalWeeklyHoursNum > 0) {
-          const regularHours = Math.min(totalWeeklyHoursNum, 40);
-          const overtimeHours = Math.max(0, totalWeeklyHoursNum - 40);
-          const regularPay = regularHours * rate;
-          const overtimePay = overtimeHours * (rate * 1.5);
-          const totalPay = regularPay + overtimePay;
-          
-          bodyText += `Hourly Rate: $${rate.toFixed(2)}\n`;
-          bodyText += `Regular Hours: ${regularHours.toFixed(2)}h ($${regularPay.toFixed(2)})\n`;
-          if (overtimeHours > 0) {
-            bodyText += `Overtime Hours: ${overtimeHours.toFixed(2)}h ($${overtimePay.toFixed(2)})\n`;
-          }
-          bodyText += `Total Pay: $${totalPay.toFixed(2)}\n`;
-        }
-        bodyText += `\n`;
+        bodyText += `Total Weekly Hours: ${totalHours}\n\n`;
         
         bodyText += `Employee Signature: ${signature ? '[Electronically Signed]' : 'Not Signed'}\n`;
         bodyText += `Date: ${date}\n`;
         
         const body = encodeURIComponent(bodyText);
-        window.location.href = `mailto:${recipientEmail}?subject=${subject}&body=${body}`;
+        const actualEmployeeEmail = user?.email || employeeEmail?.trim();
+        const ccParam = actualEmployeeEmail ? `cc=${encodeURIComponent(actualEmployeeEmail)}&` : '';
+        window.location.href = `mailto:${recipientEmail}?${ccParam}subject=${subject}&body=${body}`;
         
         // Record the sent email
         setSentLogs(prev => [...prev, { date: new Date().toISOString(), recipient: recipientEmail }]);
@@ -705,10 +710,10 @@ export default function App() {
 
   const confirmClear = () => {
     setName('');
+    setEmployeeEmail('');
     setWeekOf('');
     setRecords(initialRecords);
     setTotalHours('');
-    setHourlyRate('');
     setSignature('');
     sigCanvas.current?.clear();
     setDate('');
@@ -719,7 +724,7 @@ export default function App() {
 
   const switchCompany = (newCompany: string) => {
     // Save current state before switching
-    const currentData = { companyName, name, weekOf, records, signature, date, recipientEmail, hourlyRate, sentLogs };
+    const currentData = { companyName, name, employeeEmail, weekOf, records, signature, date, recipientEmail, sentLogs };
     localStorage.setItem(`${STORAGE_KEY_PREFIX}${companyName}`, JSON.stringify(currentData));
 
     // Load new company data
@@ -729,9 +734,9 @@ export default function App() {
     localStorage.setItem(LAST_COMPANY_KEY, newCompany);
     
     setName(newData?.name || '');
+    setEmployeeEmail(newData?.employeeEmail || '');
     setWeekOf(newData?.weekOf || '');
     setRecords(newData?.records || initialRecords);
-    setHourlyRate(newData?.hourlyRate || '');
     setSignature(newData?.signature || '');
     setDate(newData?.date || '');
     setRecipientEmail(newData?.recipientEmail || DEFAULT_EMAIL);
@@ -779,6 +784,7 @@ export default function App() {
     const data = historyData[week];
     if (data) {
       setName(data.name || '');
+      setEmployeeEmail(data.employeeEmail || '');
       setWeekOf(data.weekOf || '');
       setRecords(data.records || initialRecords);
       setSignature(data.signature || '');
@@ -840,12 +846,6 @@ export default function App() {
     .sort((a, b) => b[0].localeCompare(a[0])); // Sort by week descending
 
   const totalWeeklyHoursNum = parseFloat(totalHours) || 0;
-  const regularHours = Math.min(totalWeeklyHoursNum, 40);
-  const overtimeHours = Math.max(0, totalWeeklyHoursNum - 40);
-  const rate = parseFloat(hourlyRate) || 0;
-  const regularPay = regularHours * rate;
-  const overtimePay = overtimeHours * (rate * 1.5);
-  const totalPay = regularPay + overtimePay;
 
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-slate-900 py-4 sm:py-8 px-2 sm:px-6 lg:px-8 print:bg-white pdf:bg-white print:py-0 pdf:py-0 print:px-0 pdf:px-0">
@@ -1162,15 +1162,29 @@ export default function App() {
 
             {/* Employee Info */}
             <div className="grid grid-cols-1 md:grid-cols-2 print:grid-cols-2 pdf:grid-cols-2 gap-4 sm:gap-6 mb-8 sm:mb-10 print:mb-4 pdf:mb-4">
-              <div className="space-y-1">
-                <label className="block text-sm font-medium text-gray-700 dark:text-slate-300">Name</label>
-                <input
-                  type="text"
-                  value={name || ''}
-                  onChange={handleNameChange}
-                  className="block w-full border-0 border-b-2 border-gray-200 dark:border-slate-700 focus:border-indigo-600 dark:focus:border-indigo-400 focus:ring-0 px-0 py-0.5 text-xl sm:text-2xl print:text-lg pdf:text-lg print:border-none pdf:border-none print:p-0 pdf:p-0 font-bold transition-colors bg-transparent text-gray-900 dark:text-white placeholder-gray-300 dark:placeholder-slate-600"
-                  placeholder="John Doe"
-                />
+              <div className="space-y-4">
+                <div className="space-y-1">
+                  <label className="block text-sm font-medium text-gray-700 dark:text-slate-300">Name</label>
+                  <input
+                    type="text"
+                    value={name || ''}
+                    onChange={handleNameChange}
+                    className="block w-full border-0 border-b-2 border-gray-200 dark:border-slate-700 focus:border-indigo-600 dark:focus:border-indigo-400 focus:ring-0 px-0 py-0.5 text-xl sm:text-2xl print:text-lg pdf:text-lg print:border-none pdf:border-none print:p-0 pdf:p-0 font-bold transition-colors bg-transparent text-gray-900 dark:text-white placeholder-gray-300 dark:placeholder-slate-600"
+                    placeholder="John Doe"
+                  />
+                </div>
+                {!user && (
+                  <div className="space-y-1 print:hidden pdf:hidden">
+                    <label className="block text-sm font-medium text-gray-700 dark:text-slate-300">Your Email (for CC)</label>
+                    <input
+                      type="email"
+                      value={employeeEmail || ''}
+                      onChange={(e) => setEmployeeEmail(e.target.value)}
+                      className="block w-full border-0 border-b-2 border-gray-200 dark:border-slate-700 focus:border-indigo-600 dark:focus:border-indigo-400 focus:ring-0 px-0 py-0.5 text-lg sm:text-xl font-bold transition-colors bg-transparent text-gray-900 dark:text-white placeholder-gray-300 dark:placeholder-slate-600"
+                      placeholder="john@example.com"
+                    />
+                  </div>
+                )}
               </div>
               <div className="space-y-1">
                 <label className="block text-sm font-medium text-gray-700 dark:text-slate-300">Week Of</label>
@@ -1491,21 +1505,6 @@ export default function App() {
               
               <div className="w-full md:w-1/3 print:w-1/3 pdf:w-1/3 bg-gray-50/50 dark:bg-slate-800/30 print:bg-transparent pdf:bg-transparent p-4 sm:p-6 print:p-0 pdf:p-0 rounded-xl border border-gray-200 dark:border-slate-700/50 print:border-none pdf:border-none">
                 <div className="flex justify-between items-center mb-4 print:mb-2 pdf:mb-2">
-                  <span className="text-base sm:text-lg print:text-sm pdf:text-sm font-medium text-gray-700 dark:text-slate-300">Hourly Rate:</span>
-                  <div className="relative">
-                    <span className="absolute left-0 top-1/2 -translate-y-1/2 text-gray-500 dark:text-slate-400 font-bold print:text-sm pdf:text-sm">$</span>
-                    <input
-                      type="number"
-                      value={hourlyRate || ''}
-                      onChange={(e) => setHourlyRate(e.target.value)}
-                      className="w-24 sm:w-32 print:w-24 pdf:w-24 text-right text-lg sm:text-xl print:text-sm pdf:text-sm font-bold text-gray-800 dark:text-white bg-transparent border-b-2 border-gray-300 dark:border-slate-600 print:border-gray-800 pdf:border-gray-800 focus:border-indigo-600 dark:focus:border-indigo-400 focus:ring-0 px-0 py-1 print:py-0 pdf:py-0 pl-4"
-                      placeholder="0.00"
-                      min="0"
-                      step="0.01"
-                    />
-                  </div>
-                </div>
-                <div className="flex justify-between items-center mb-4 print:mb-2 pdf:mb-2">
                   <span className="text-base sm:text-lg print:text-sm pdf:text-sm font-medium text-gray-700 dark:text-slate-300">Total Hours:</span>
                   <input
                     type="text"
@@ -1518,25 +1517,6 @@ export default function App() {
                     <div className="text-red-500 text-xs mt-1 text-right print:hidden pdf:hidden">Invalid number</div>
                   )}
                 </div>
-                
-                {hourlyRate && !isNaN(Number(hourlyRate)) && totalWeeklyHoursNum > 0 && (
-                  <div className="mt-4 pt-4 border-t border-gray-200 dark:border-slate-700/50 print:border-gray-800 pdf:border-gray-800 space-y-2 print:space-y-1 pdf:space-y-1">
-                    <div className="flex justify-between items-center text-sm print:text-xs pdf:text-xs text-gray-600 dark:text-slate-300 print:text-gray-800 pdf:text-gray-800">
-                      <span>Regular ({regularHours.toFixed(2)}h):</span>
-                      <span>${regularPay.toFixed(2)}</span>
-                    </div>
-                    {overtimeHours > 0 && (
-                      <div className="flex justify-between items-center text-sm print:text-xs pdf:text-xs text-amber-600 dark:text-amber-400 print:text-gray-800 pdf:text-gray-800 font-medium">
-                        <span>Overtime ({overtimeHours.toFixed(2)}h @ 1.5x):</span>
-                        <span>${overtimePay.toFixed(2)}</span>
-                      </div>
-                    )}
-                    <div className="flex justify-between items-center text-lg print:text-base pdf:text-base font-bold text-gray-900 dark:text-white pt-2 border-t border-gray-200 dark:border-slate-700/50 print:border-gray-800 pdf:border-gray-800">
-                      <span>Total Pay:</span>
-                      <span>${totalPay.toFixed(2)}</span>
-                    </div>
-                  </div>
-                )}
               </div>
             </div>
 
