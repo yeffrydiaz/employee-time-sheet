@@ -34,6 +34,57 @@ const HISTORY_STORAGE_KEY_PREFIX = 'employee_timesheet_history_';
 const LAST_COMPANY_KEY = 'last_active_company';
 const DEFAULT_EMAIL = 'TIMESHEETS@ROYAL-TRANS.COM';
 
+const getInitialWeekOf = () => {
+  const today = new Date();
+  const diff = today.getDay(); // 0 is Sunday
+  const sunday = new Date(today);
+  sunday.setDate(today.getDate() - diff);
+  return sunday.toISOString().split('T')[0];
+};
+
+const getTodayDate = () => {
+  return new Date().toISOString().split('T')[0];
+};
+
+const generateRecordsForPeriod = (period: string, weekOfStr: string, existingRecords: DailyRecord[]) => {
+  let startDateStr = weekOfStr || getInitialWeekOf();
+  const [year, month, day] = startDateStr.split('-').map(Number);
+  const selectedDate = new Date(year, month - 1, day);
+  const diff = selectedDate.getDay();
+  let startDate = new Date(year, month - 1, day - diff);
+  
+  let numDays = 14; // Default Bi-weekly
+  if (period === 'Weekly') numDays = 7;
+  else if (period === 'Monthly') {
+    // Start from the 1st of the month based on the selected weekOf
+    const daysInMonth = new Date(year, month, 0).getDate();
+    numDays = daysInMonth;
+    startDate = new Date(year, month - 1, 1);
+  }
+  
+  const newRecords: DailyRecord[] = [];
+  const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  for (let i = 0; i < numDays; i++) {
+    const recordDate = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate() + i);
+    const dayName = days[recordDate.getDay()];
+    const yyyy = recordDate.getFullYear();
+    const mm = String(recordDate.getMonth() + 1).padStart(2, '0');
+    const dd = String(recordDate.getDate()).padStart(2, '0');
+    const dateStr = `${yyyy}-${mm}-${dd}`;
+    
+    // Copy existing record if available
+    const existing = existingRecords.find(r => r.date === dateStr);
+    if (existing) {
+      newRecords.push({ ...existing, day: dayName });
+    } else if (existingRecords[i] && existingRecords[i].day === dayName && !existingRecords[i].date) {
+      newRecords.push({ ...existingRecords[i], date: dateStr, day: dayName });
+    } else {
+      newRecords.push({ day: dayName, date: dateStr, timeIn: '', lunchStart: '', lunchEnd: '', timeOut: '', totalHours: '', notes: '' });
+    }
+  }
+  return newRecords;
+};
+
 const getInitialCompany = () => {
   if (typeof window !== 'undefined') {
     return localStorage.getItem(LAST_COMPANY_KEY) || 'Royal Transportation';
@@ -69,24 +120,11 @@ export default function App() {
       return ['Royal Transportation'];
     }
   });
-  const [name, setName] = useState(savedData?.name || '');
-  const [employeeEmail, setEmployeeEmail] = useState(savedData?.employeeEmail || '');
-  const [weekOf, setWeekOf] = useState(savedData?.weekOf || '');
-  const [records, setRecords] = useState<DailyRecord[]>(savedData?.records || initialRecords);
-  const [totalHours, setTotalHours] = useState('');
-  const [signature, setSignature] = useState(savedData?.signature || '');
-  const [date, setDate] = useState(savedData?.date || '');
-  const [recipientEmail, setRecipientEmail] = useState(savedData?.recipientEmail || DEFAULT_EMAIL);
-  const [sentLogs, setSentLogs] = useState<{date: string, recipient: string}[]>(savedData?.sentLogs || []);
-  const [lastSaved, setLastSaved] = useState<Date | null>(null);
-  const [isSending, setIsSending] = useState(false);
-  const [isGeneratingPDF, setIsGeneratingPDF] = useState(false);
-  
   // History and Modal states
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [shiftSettings, setShiftSettings] = useState(() => {
-    const defaultSettings = { startTime: '09:00', lunchStart: '12:00', lunchEnd: '13:00', endTime: '17:00', enabled: true };
+    const defaultSettings = { startTime: '09:00', lunchStart: '12:00', lunchEnd: '13:00', endTime: '17:00', enabled: true, period: 'Bi-weekly' };
     try {
       const saved = localStorage.getItem('shift_settings');
       if (saved) {
@@ -98,6 +136,23 @@ export default function App() {
       return defaultSettings;
     }
   });
+
+  const [name, setName] = useState(savedData?.name || '');
+  const [employeeEmail, setEmployeeEmail] = useState(savedData?.employeeEmail || '');
+  const [weekOf, setWeekOf] = useState(savedData?.weekOf || getInitialWeekOf());
+  const [records, setRecords] = useState<DailyRecord[]>(() => {
+    const initialWeek = savedData?.weekOf || getInitialWeekOf();
+    const loadedRecords = savedData?.records || initialRecords;
+    return generateRecordsForPeriod(shiftSettings.period, initialWeek, loadedRecords);
+  });
+  const [totalHours, setTotalHours] = useState('');
+  const [signature, setSignature] = useState(savedData?.signature || '');
+  const [date, setDate] = useState(savedData?.date || getTodayDate());
+  const [recipientEmail, setRecipientEmail] = useState(savedData?.recipientEmail || DEFAULT_EMAIL);
+  const [sentLogs, setSentLogs] = useState<{date: string, recipient: string}[]>(savedData?.sentLogs || []);
+  const [lastSaved, setLastSaved] = useState<Date | null>(null);
+  const [isSending, setIsSending] = useState(false);
+  const [isGeneratingPDF, setIsGeneratingPDF] = useState(false);
   const [historySearchTerm, setHistorySearchTerm] = useState('');
   const [historyData, setHistoryData] = useState<Record<string, any>>({});
   const [showClearConfirm, setShowClearConfirm] = useState(false);
@@ -428,18 +483,7 @@ export default function App() {
     setWeekOf(newWeekOf);
     
     if (newWeekOf) {
-      const [year, month, day] = newWeekOf.split('-').map(Number);
-      const selectedDate = new Date(year, month - 1, day);
-      const dayOfWeek = selectedDate.getDay();
-      const sundayDate = new Date(year, month - 1, day - dayOfWeek);
-      
-      const newRecords = records.map((record, index) => {
-        const recordDate = new Date(sundayDate.getFullYear(), sundayDate.getMonth(), sundayDate.getDate() + index);
-        const yyyy = recordDate.getFullYear();
-        const mm = String(recordDate.getMonth() + 1).padStart(2, '0');
-        const dd = String(recordDate.getDate()).padStart(2, '0');
-        return { ...record, date: `${yyyy}-${mm}-${dd}` };
-      });
+      const newRecords = generateRecordsForPeriod(shiftSettings.period, newWeekOf, records);
       setRecords(newRecords);
     }
   };
@@ -711,12 +755,13 @@ export default function App() {
   const confirmClear = () => {
     setName('');
     setEmployeeEmail('');
-    setWeekOf('');
-    setRecords(initialRecords);
+    const newWeekOf = getInitialWeekOf();
+    setWeekOf(newWeekOf);
+    setRecords(generateRecordsForPeriod(shiftSettings.period, newWeekOf, []));
     setTotalHours('');
     setSignature('');
     sigCanvas.current?.clear();
-    setDate('');
+    setDate(getTodayDate());
     setRecipientEmail(DEFAULT_EMAIL);
     setSentLogs([]);
     setShowClearConfirm(false);
@@ -735,10 +780,11 @@ export default function App() {
     
     setName(newData?.name || '');
     setEmployeeEmail(newData?.employeeEmail || '');
-    setWeekOf(newData?.weekOf || '');
-    setRecords(newData?.records || initialRecords);
+    const newWeekOf = newData?.weekOf || getInitialWeekOf();
+    setWeekOf(newWeekOf);
+    setRecords(generateRecordsForPeriod(shiftSettings.period, newWeekOf, newData?.records || []));
     setSignature(newData?.signature || '');
-    setDate(newData?.date || '');
+    setDate(newData?.date || getTodayDate());
     setRecipientEmail(newData?.recipientEmail || DEFAULT_EMAIL);
     setSentLogs(newData?.sentLogs || []);
     
@@ -1207,10 +1253,19 @@ export default function App() {
                   <div className="flex justify-between items-center border-b border-gray-100 dark:border-slate-700/50 pb-2">
                     <h3 className="font-semibold text-gray-900 dark:text-white">{record.day}</h3>
                     <input
-                      type="date"
-                      value={record.date || ''}
-                      onChange={(e) => handleRecordChange(index, 'date', e.target.value)}
-                      className="text-sm border-gray-300 dark:border-slate-600 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 py-1 px-2 bg-white/50 dark:bg-slate-800/50 text-gray-900 dark:text-white w-36"
+                      type="text"
+                      value={record.date ? record.date.split('-')[2] : ''}
+                      onChange={(e) => {
+                        const day = e.target.value;
+                        if (record.date) {
+                          const parts = record.date.split('-');
+                          handleRecordChange(index, 'date', `${parts[0]}-${parts[1]}-${day.padStart(2, '0')}`);
+                        } else {
+                          const today = new Date();
+                          handleRecordChange(index, 'date', `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${day.padStart(2, '0')}`);
+                        }
+                      }}
+                      className="text-sm border-gray-300 dark:border-slate-600 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 py-1 px-2 bg-white/50 dark:bg-slate-800/50 text-gray-900 dark:text-white w-16 text-center"
                     />
                   </div>
                   
@@ -1344,12 +1399,12 @@ export default function App() {
                 <thead className="bg-gray-50/50 dark:bg-slate-800/50 print:bg-transparent pdf:bg-transparent">
                   <tr>
                     <th scope="col" className="px-2 py-3 print:px-1 pdf:px-1 print:py-1 pdf:py-1 text-left text-sm print:text-[10px] pdf:text-[10px] font-semibold text-gray-600 dark:text-slate-300 uppercase tracking-wider w-40 print:w-[14%] pdf:w-[14%]">Date</th>
-                    <th scope="col" className="px-2 py-3 print:px-1 pdf:px-1 print:py-1 pdf:py-1 text-left text-sm print:text-[10px] pdf:text-[10px] font-semibold text-gray-600 dark:text-slate-300 uppercase tracking-wider w-24 print:w-[12%] pdf:w-[12%]">Time In</th>
-                    <th scope="col" className="px-2 py-3 print:px-1 pdf:px-1 print:py-1 pdf:py-1 text-left text-sm print:text-[10px] pdf:text-[10px] font-semibold text-gray-600 dark:text-slate-300 uppercase tracking-wider w-24 print:w-[12%] pdf:w-[12%]">Lunch Start</th>
-                    <th scope="col" className="px-2 py-3 print:px-1 pdf:px-1 print:py-1 pdf:py-1 text-left text-sm print:text-[10px] pdf:text-[10px] font-semibold text-gray-600 dark:text-slate-300 uppercase tracking-wider w-24 print:w-[12%] pdf:w-[12%]">Lunch End</th>
-                    <th scope="col" className="px-2 py-3 print:px-1 pdf:px-1 print:py-1 pdf:py-1 text-left text-sm print:text-[10px] pdf:text-[10px] font-semibold text-gray-600 dark:text-slate-300 uppercase tracking-wider w-24 print:w-[12%] pdf:w-[12%]">Time Out</th>
+                    <th scope="col" className="px-1 py-3 print:px-1 pdf:px-1 print:py-1 pdf:py-1 text-left text-sm print:text-[10px] pdf:text-[10px] font-semibold text-gray-600 dark:text-slate-300 uppercase tracking-wider w-[5.5rem] print:w-[12%] pdf:w-[12%]">Time In</th>
+                    <th scope="col" className="px-1 py-3 print:px-1 pdf:px-1 print:py-1 pdf:py-1 text-left text-sm print:text-[10px] pdf:text-[10px] font-semibold text-gray-600 dark:text-slate-300 uppercase tracking-wider w-[5.5rem] print:w-[12%] pdf:w-[12%]">Lunch Start</th>
+                    <th scope="col" className="px-1 py-3 print:px-1 pdf:px-1 print:py-1 pdf:py-1 text-left text-sm print:text-[10px] pdf:text-[10px] font-semibold text-gray-600 dark:text-slate-300 uppercase tracking-wider w-[5.5rem] print:w-[12%] pdf:w-[12%]">Lunch End</th>
+                    <th scope="col" className="px-1 py-3 print:px-1 pdf:px-1 print:py-1 pdf:py-1 text-left text-sm print:text-[10px] pdf:text-[10px] font-semibold text-gray-600 dark:text-slate-300 uppercase tracking-wider w-[5.5rem] print:w-[12%] pdf:w-[12%]">Time Out</th>
                     <th scope="col" className="px-0 py-3 print:px-0 pdf:px-0 print:py-1 pdf:py-1 text-center text-sm print:text-[10px] pdf:text-[10px] font-semibold text-gray-600 dark:text-slate-300 uppercase tracking-wider w-20 print:w-[10%] pdf:w-[10%]">Total Hrs</th>
-                    <th scope="col" className="px-2 py-3 print:px-1 pdf:px-1 print:py-1 pdf:py-1 text-left text-sm print:text-[10px] pdf:text-[10px] font-semibold text-gray-600 dark:text-slate-300 uppercase tracking-wider print:w-[28%] pdf:w-[28%]">Notes</th>
+                    <th scope="col" className="px-1 py-3 print:px-1 pdf:px-1 print:py-1 pdf:py-1 text-left text-sm print:text-[10px] pdf:text-[10px] font-semibold text-gray-600 dark:text-slate-300 uppercase tracking-wider print:w-[28%] pdf:w-[28%] w-full">Notes</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-200 dark:divide-slate-700/50 print:divide-gray-800 pdf:divide-gray-800">
@@ -1360,13 +1415,22 @@ export default function App() {
                       <td className="px-2 py-2 print:px-1 pdf:px-1 print:py-1 pdf:py-1 align-top bg-gray-50/50 dark:bg-slate-800/30 print:bg-transparent pdf:bg-transparent">
                         <div className="text-sm print:text-[10px] pdf:text-[10px] font-medium text-gray-900 dark:text-white mb-1 ml-1 print:mb-0 pdf:mb-0 print:ml-0 pdf:ml-0">{record.day}</div>
                         <input
-                          type="date"
-                          value={record.date || ''}
-                          onChange={(e) => handleRecordChange(index, 'date', e.target.value)}
-                          className="w-full border-gray-300 dark:border-slate-600 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 text-xl print:text-[10px] pdf:text-[10px] print:border-none pdf:border-none print:bg-transparent pdf:bg-transparent print:shadow-none pdf:shadow-none print:p-0 pdf:p-0 print:min-w-0 pdf:min-w-0 font-bold py-0 px-0 bg-transparent text-gray-900 dark:text-white"
+                          type="text"
+                          value={record.date ? record.date.split('-')[2] : ''}
+                          onChange={(e) => {
+                            const day = e.target.value;
+                            if (record.date) {
+                              const parts = record.date.split('-');
+                              handleRecordChange(index, 'date', `${parts[0]}-${parts[1]}-${day.padStart(2, '0')}`);
+                            } else {
+                              const today = new Date();
+                              handleRecordChange(index, 'date', `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${day.padStart(2, '0')}`);
+                            }
+                          }}
+                          className="w-16 border-gray-300 dark:border-slate-600 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 text-xl print:text-[10px] pdf:text-[10px] print:border-none pdf:border-none print:bg-transparent pdf:bg-transparent print:shadow-none pdf:shadow-none print:p-0 pdf:p-0 print:min-w-0 pdf:min-w-0 font-bold py-0 px-2 bg-transparent text-gray-900 dark:text-white text-center"
                         />
                       </td>
-                      <td className="px-2 py-2 print:px-1 pdf:px-1 print:py-1 pdf:py-1 align-top">
+                      <td className="px-1 py-2 print:px-1 pdf:px-1 print:py-1 pdf:py-1 align-top">
                         <div className="h-6 print:hidden pdf:hidden flex justify-end items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity focus-within:opacity-100">
                           {!record.timeIn && (
                             <button onClick={() => handleRecordChange(index, 'timeIn', getCurrentTime())} className="text-[9px] font-medium text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-300 uppercase tracking-wider bg-indigo-50 dark:bg-indigo-900/30 px-1 py-0.5 rounded" title="Set to current time">Now</button>
@@ -1381,11 +1445,11 @@ export default function App() {
                           type="time"
                           value={record.timeIn || ''}
                           onChange={(e) => handleRecordChange(index, 'timeIn', e.target.value)}
-                          className={`w-full rounded-md shadow-sm text-xl print:text-[11px] pdf:text-[11px] print:border-none pdf:border-none print:bg-transparent pdf:bg-transparent print:shadow-none pdf:shadow-none print:p-0 pdf:p-0 print:min-w-0 pdf:min-w-0 font-bold py-0 px-0 bg-transparent text-gray-900 dark:text-white ${errors.timeIn ? 'border-red-500 focus:ring-red-500 focus:border-red-500' : 'border-gray-300 dark:border-slate-600 focus:ring-indigo-500 focus:border-indigo-500'}`}
+                          className={`w-full rounded-md shadow-sm text-lg print:text-[11px] pdf:text-[11px] print:border-none pdf:border-none print:bg-transparent pdf:bg-transparent print:shadow-none pdf:shadow-none print:p-0 pdf:p-0 print:min-w-0 pdf:min-w-0 font-bold py-0 px-0 bg-transparent text-gray-900 dark:text-white ${errors.timeIn ? 'border-red-500 focus:ring-red-500 focus:border-red-500' : 'border-gray-300 dark:border-slate-600 focus:ring-indigo-500 focus:border-indigo-500'}`}
                         />
                         {errors.timeIn && <div className="text-[10px] text-red-500 mt-1 print:hidden pdf:hidden">{errors.timeIn}</div>}
                       </td>
-                      <td className="px-2 py-2 print:px-1 pdf:px-1 print:py-1 pdf:py-1 align-top">
+                      <td className="px-1 py-2 print:px-1 pdf:px-1 print:py-1 pdf:py-1 align-top">
                         <div className="h-6 print:hidden pdf:hidden flex justify-end items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity focus-within:opacity-100">
                           {!record.lunchStart && (
                             <button onClick={() => handleRecordChange(index, 'lunchStart', getCurrentTime())} className="text-[9px] font-medium text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-300 uppercase tracking-wider bg-indigo-50 dark:bg-indigo-900/30 px-1 py-0.5 rounded" title="Set to current time">Now</button>
@@ -1400,11 +1464,11 @@ export default function App() {
                           type="time"
                           value={record.lunchStart || ''}
                           onChange={(e) => handleRecordChange(index, 'lunchStart', e.target.value)}
-                          className={`w-full rounded-md shadow-sm text-xl print:text-[11px] pdf:text-[11px] print:border-none pdf:border-none print:bg-transparent pdf:bg-transparent print:shadow-none pdf:shadow-none print:p-0 pdf:p-0 print:min-w-0 pdf:min-w-0 font-bold py-0 px-0 bg-transparent text-gray-900 dark:text-white ${errors.lunchStart ? 'border-red-500 focus:ring-red-500 focus:border-red-500' : 'border-gray-300 dark:border-slate-600 focus:ring-indigo-500 focus:border-indigo-500'}`}
+                          className={`w-full rounded-md shadow-sm text-lg print:text-[11px] pdf:text-[11px] print:border-none pdf:border-none print:bg-transparent pdf:bg-transparent print:shadow-none pdf:shadow-none print:p-0 pdf:p-0 print:min-w-0 pdf:min-w-0 font-bold py-0 px-0 bg-transparent text-gray-900 dark:text-white ${errors.lunchStart ? 'border-red-500 focus:ring-red-500 focus:border-red-500' : 'border-gray-300 dark:border-slate-600 focus:ring-indigo-500 focus:border-indigo-500'}`}
                         />
                         {errors.lunchStart && <div className="text-[10px] text-red-500 mt-1 print:hidden pdf:hidden">{errors.lunchStart}</div>}
                       </td>
-                      <td className="px-2 py-2 print:px-1 pdf:px-1 print:py-1 pdf:py-1 align-top">
+                      <td className="px-1 py-2 print:px-1 pdf:px-1 print:py-1 pdf:py-1 align-top">
                         <div className="h-6 print:hidden pdf:hidden flex justify-end items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity focus-within:opacity-100">
                           {!record.lunchEnd && (
                             <button onClick={() => handleRecordChange(index, 'lunchEnd', getCurrentTime())} className="text-[9px] font-medium text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-300 uppercase tracking-wider bg-indigo-50 dark:bg-indigo-900/30 px-1 py-0.5 rounded" title="Set to current time">Now</button>
@@ -1419,11 +1483,11 @@ export default function App() {
                           type="time"
                           value={record.lunchEnd || ''}
                           onChange={(e) => handleRecordChange(index, 'lunchEnd', e.target.value)}
-                          className={`w-full rounded-md shadow-sm text-xl print:text-[11px] pdf:text-[11px] print:border-none pdf:border-none print:bg-transparent pdf:bg-transparent print:shadow-none pdf:shadow-none print:p-0 pdf:p-0 print:min-w-0 pdf:min-w-0 font-bold py-0 px-0 bg-transparent text-gray-900 dark:text-white ${errors.lunchEnd ? 'border-red-500 focus:ring-red-500 focus:border-red-500' : 'border-gray-300 dark:border-slate-600 focus:ring-indigo-500 focus:border-indigo-500'}`}
+                          className={`w-full rounded-md shadow-sm text-lg print:text-[11px] pdf:text-[11px] print:border-none pdf:border-none print:bg-transparent pdf:bg-transparent print:shadow-none pdf:shadow-none print:p-0 pdf:p-0 print:min-w-0 pdf:min-w-0 font-bold py-0 px-0 bg-transparent text-gray-900 dark:text-white ${errors.lunchEnd ? 'border-red-500 focus:ring-red-500 focus:border-red-500' : 'border-gray-300 dark:border-slate-600 focus:ring-indigo-500 focus:border-indigo-500'}`}
                         />
                         {errors.lunchEnd && <div className="text-[10px] text-red-500 mt-1 print:hidden pdf:hidden">{errors.lunchEnd}</div>}
                       </td>
-                      <td className="px-2 py-2 print:px-1 pdf:px-1 print:py-1 pdf:py-1 align-top">
+                      <td className="px-1 py-2 print:px-1 pdf:px-1 print:py-1 pdf:py-1 align-top">
                         <div className="h-6 print:hidden pdf:hidden flex justify-end items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity focus-within:opacity-100">
                           {!record.timeOut && (
                             <button onClick={() => handleRecordChange(index, 'timeOut', getCurrentTime())} className="text-[9px] font-medium text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-300 uppercase tracking-wider bg-indigo-50 dark:bg-indigo-900/30 px-1 py-0.5 rounded" title="Set to current time">Now</button>
@@ -1438,7 +1502,7 @@ export default function App() {
                           type="time"
                           value={record.timeOut || ''}
                           onChange={(e) => handleRecordChange(index, 'timeOut', e.target.value)}
-                          className={`w-full rounded-md shadow-sm text-xl print:text-[11px] pdf:text-[11px] print:border-none pdf:border-none print:bg-transparent pdf:bg-transparent print:shadow-none pdf:shadow-none print:p-0 pdf:p-0 print:min-w-0 pdf:min-w-0 font-bold py-0 px-0 bg-transparent text-gray-900 dark:text-white ${errors.timeOut ? 'border-red-500 focus:ring-red-500 focus:border-red-500' : 'border-gray-300 dark:border-slate-600 focus:ring-indigo-500 focus:border-indigo-500'}`}
+                          className={`w-full rounded-md shadow-sm text-lg print:text-[11px] pdf:text-[11px] print:border-none pdf:border-none print:bg-transparent pdf:bg-transparent print:shadow-none pdf:shadow-none print:p-0 pdf:p-0 print:min-w-0 pdf:min-w-0 font-bold py-0 px-0 bg-transparent text-gray-900 dark:text-white ${errors.timeOut ? 'border-red-500 focus:ring-red-500 focus:border-red-500' : 'border-gray-300 dark:border-slate-600 focus:ring-indigo-500 focus:border-indigo-500'}`}
                         />
                         {errors.timeOut && <div className="text-[10px] text-red-500 mt-1 print:hidden pdf:hidden">{errors.timeOut}</div>}
                       </td>
@@ -1453,13 +1517,13 @@ export default function App() {
                         />
                         {errors.totalHours && <div className="text-[10px] text-red-500 mt-1 print:hidden pdf:hidden">{errors.totalHours}</div>}
                       </td>
-                      <td className="px-2 py-2 print:px-1 pdf:px-1 print:py-1 pdf:py-1 align-top">
+                      <td className="px-1 py-2 print:px-1 pdf:px-1 print:py-1 pdf:py-1 align-top">
                         <div className="h-6 print:hidden pdf:hidden"></div>
                         <input
                           type="text"
                           value={record.notes || ''}
                           onChange={(e) => handleRecordChange(index, 'notes', e.target.value)}
-                          className="w-full border-gray-300 dark:border-slate-600 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 text-xl print:text-[10px] pdf:text-[10px] print:border-none pdf:border-none print:bg-transparent pdf:bg-transparent print:shadow-none pdf:shadow-none print:p-0 pdf:p-0 print:min-w-0 pdf:min-w-0 font-bold py-0 px-0 bg-transparent text-gray-900 dark:text-white"
+                          className="w-full border-gray-300 dark:border-slate-600 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 text-lg print:text-[10px] pdf:text-[10px] print:border-none pdf:border-none print:bg-transparent pdf:bg-transparent print:shadow-none pdf:shadow-none print:p-0 pdf:p-0 print:min-w-0 pdf:min-w-0 font-bold py-0 px-0 bg-transparent text-gray-900 dark:text-white"
                           placeholder="..."
                         />
                       </td>
@@ -1668,6 +1732,29 @@ export default function App() {
                   </div>
                 </div>
                 
+                <div className="pt-6 border-t border-gray-100 dark:border-slate-700/50">
+                  <h4 className="text-sm font-medium text-gray-900 dark:text-white mb-4">Timesheet Period</h4>
+                  <div className="flex flex-col gap-4">
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 dark:text-slate-400 mb-1">Select Period (Default: Bi-weekly)</label>
+                      <select
+                        value={shiftSettings.period}
+                        onChange={(e) => {
+                          const newSettings = { ...shiftSettings, period: e.target.value };
+                          setShiftSettings(newSettings);
+                          localStorage.setItem('shift_settings', JSON.stringify(newSettings));
+                          setRecords(generateRecordsForPeriod(e.target.value, weekOf, records));
+                        }}
+                        className="w-full px-3 py-2 border border-gray-300 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-indigo-500 bg-white dark:bg-slate-900 text-gray-900 dark:text-white"
+                      >
+                        <option value="Weekly">Weekly (7 Days)</option>
+                        <option value="Bi-weekly">Bi-weekly (14 Days)</option>
+                        <option value="Monthly">Monthly</option>
+                      </select>
+                    </div>
+                  </div>
+                </div>
+
                 <div className="pt-6 border-t border-gray-100 dark:border-slate-700/50">
                   <h4 className="text-sm font-medium text-gray-900 dark:text-white mb-4">General Actions</h4>
                   <div className="flex flex-col gap-3">
