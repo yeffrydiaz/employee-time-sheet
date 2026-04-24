@@ -273,13 +273,15 @@ export default function App() {
           }
         };
 
-        const response = await fetch('https://recaptchaenterprise.googleapis.com/v1/projects/webnow10101/assessments?key=6Lc1QcUsAAAAAB7EjZgWtJljysfy7EvkeR1scH8N', {
+        const response = await fetch('https://recaptchaenterprise.googleapis.com/v1/projects/webnow10101/assessments?key=AIzaSyAH1TKdnq8XLAUHTzDjFnoXf7DIemunZUo', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(requestBody)
         });
         
         if (!response.ok) {
+          const errorData = await response.json();
+          console.error("reCAPTCHA API Error:", errorData);
           throw new Error('reCAPTCHA verification failed');
         }
       } catch (e) {
