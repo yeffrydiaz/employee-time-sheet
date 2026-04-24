@@ -5,7 +5,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import jsPDF from 'jspdf';
 import { toPng } from 'html-to-image';
 import { auth, db, googleProvider } from './firebase';
-import { signInWithPopup, signOut, onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
+import { signInWithPopup, signOut, onAuthStateChanged, User as FirebaseUser, signInWithEmailAndPassword, createUserWithEmailAndPassword } from 'firebase/auth';
 import { collection, doc, setDoc, getDocs, deleteDoc, serverTimestamp, query, where, onSnapshot } from 'firebase/firestore';
 
 interface DailyRecord {
@@ -185,6 +185,8 @@ export default function App() {
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [authError, setAuthError] = useState('');
   const [isAuthenticating, setIsAuthenticating] = useState(false);
+  const [authEmail, setAuthEmail] = useState('');
+  const [authPassword, setAuthPassword] = useState('');
   
   // Dark mode state
   const [isDarkMode, setIsDarkMode] = useState(() => {
@@ -249,16 +251,99 @@ export default function App() {
     return () => unsubscribe();
   }, [companyName]);
 
+  const verifyRecaptcha = async (action: string) => {
+    if (typeof window !== 'undefined' && 'grecaptcha' in window) {
+      try {
+        const token = await new Promise<string>((resolve, reject) => {
+          (window as any).grecaptcha.enterprise.ready(async () => {
+            try {
+              const result = await (window as any).grecaptcha.enterprise.execute('6Lc1QcUsAAAAAB7EjZgWtJljysfy7EvkeR1scH8N', {action});
+              resolve(result);
+            } catch (e) {
+              reject(e);
+            }
+          });
+        });
+
+        const response = await fetch('/api/verify-recaptcha', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token, action })
+        });
+        
+        if (!response.ok) {
+          throw new Error('reCAPTCHA verification failed');
+        }
+      } catch (e) {
+        console.error('reCAPTCHA error', e);
+        throw new Error('Security check failed. Please try again.');
+      }
+    }
+  };
+
   const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsAuthenticating(true);
     setAuthError('');
     
     try {
+      await verifyRecaptcha('LOGIN');
       await signInWithPopup(auth, googleProvider);
       setShowAuthModal(false);
     } catch (err: any) {
       setAuthError(err.message);
+    } finally {
+      setIsAuthenticating(false);
+    }
+  };
+
+  const handleEmailSignIn = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!authEmail || !authPassword) {
+      setAuthError('Please enter both email and password.');
+      return;
+    }
+    setIsAuthenticating(true);
+    setAuthError('');
+    try {
+      await verifyRecaptcha('LOGIN');
+      await signInWithEmailAndPassword(auth, authEmail, authPassword);
+      setShowAuthModal(false);
+      setAuthEmail('');
+      setAuthPassword('');
+    } catch (err: any) {
+      if (err.code === 'auth/invalid-credential' || err.code === 'auth/user-not-found' || err.code === 'auth/wrong-password') {
+        setAuthError('Invalid email or password.');
+      } else {
+        setAuthError(err.message);
+      }
+    } finally {
+      setIsAuthenticating(false);
+    }
+  };
+
+  const handleEmailSignUp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!authEmail || !authPassword) {
+      setAuthError('Please enter both email and password.');
+      return;
+    }
+    setIsAuthenticating(true);
+    setAuthError('');
+    try {
+      await verifyRecaptcha('SIGNUP');
+      await createUserWithEmailAndPassword(auth, authEmail, authPassword);
+      setShowAuthModal(false);
+      setAuthEmail('');
+      setAuthPassword('');
+    } catch (err: any) {
+      if (err.code === 'auth/email-already-in-use') {
+        setAuthError('An account with this email already exists. Please sign in instead.');
+      } else if (err.code === 'auth/weak-password') {
+        setAuthError('Password should be at least 6 characters.');
+      } else {
+        setAuthError(err.message);
+      }
     } finally {
       setIsAuthenticating(false);
     }
@@ -1248,7 +1333,7 @@ export default function App() {
               {records.map((record, index) => {
                 const errors = getErrors(record);
                 return (
-                <div key={record.day} className="bg-white/40 dark:bg-slate-800/40 backdrop-blur-md p-3.5 rounded-xl border border-white/50 dark:border-slate-700/50 shadow-sm flex flex-col gap-3">
+                <div key={index} className="bg-white/40 dark:bg-slate-800/40 backdrop-blur-md p-3.5 rounded-xl border border-white/50 dark:border-slate-700/50 shadow-sm flex flex-col gap-3">
                   {/* Header: Day and Date */}
                   <div className="flex justify-between items-center border-b border-gray-100 dark:border-slate-700/50 pb-2">
                     <h3 className="font-semibold text-gray-900 dark:text-white">{record.day}</h3>
@@ -1411,7 +1496,7 @@ export default function App() {
                   {records.map((record, index) => {
                     const errors = getErrors(record);
                     return (
-                    <tr key={record.day} className="hover:bg-gray-100/50 dark:hover:bg-slate-800/50 transition-colors group">
+                    <tr key={index} className="hover:bg-gray-100/50 dark:hover:bg-slate-800/50 transition-colors group">
                       <td className="px-2 py-2 print:px-1 pdf:px-1 print:py-1 pdf:py-1 align-top bg-gray-50/50 dark:bg-slate-800/30 print:bg-transparent pdf:bg-transparent">
                         <div className="text-sm print:text-[10px] pdf:text-[10px] font-medium text-gray-900 dark:text-white mb-1 ml-1 print:mb-0 pdf:mb-0 print:ml-0 pdf:ml-0">{record.day}</div>
                         <input
@@ -1910,6 +1995,49 @@ export default function App() {
                   {isAuthenticating ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
                   Sign in with Google
                 </button>
+
+                <div className="relative">
+                  <div className="absolute inset-0 flex items-center">
+                    <div className="w-full border-t border-gray-200 dark:border-slate-700"></div>
+                  </div>
+                  <div className="relative flex justify-center text-sm">
+                    <span className="px-2 text-gray-500 bg-white/90 dark:bg-slate-800/90 backdrop-blur-xl">Or continue with email</span>
+                  </div>
+                </div>
+
+                <div className="space-y-3">
+                  <input
+                    type="email"
+                    placeholder="Email address"
+                    value={authEmail}
+                    onChange={(e) => setAuthEmail(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-indigo-500 bg-white dark:bg-slate-900 text-gray-900 dark:text-white placeholder-gray-400"
+                  />
+                  <input
+                    type="password"
+                    placeholder="Password"
+                    value={authPassword}
+                    onChange={(e) => setAuthPassword(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-indigo-500 bg-white dark:bg-slate-900 text-gray-900 dark:text-white placeholder-gray-400"
+                  />
+                  
+                  <div className="flex gap-2">
+                    <button
+                      onClick={handleEmailSignIn}
+                      disabled={isAuthenticating}
+                      className="flex-1 flex justify-center items-center px-4 py-2 text-sm font-medium text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-900/30 border border-indigo-200 dark:border-indigo-800/50 rounded-lg hover:bg-indigo-100 dark:hover:bg-indigo-900/50 transition-colors disabled:opacity-70"
+                    >
+                      Sign In
+                    </button>
+                    <button
+                      onClick={handleEmailSignUp}
+                      disabled={isAuthenticating}
+                      className="flex-1 flex justify-center items-center px-4 py-2 text-sm font-medium text-gray-700 dark:text-slate-300 bg-gray-50 dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-lg hover:bg-gray-100 dark:hover:bg-slate-700 transition-colors disabled:opacity-70"
+                    >
+                      Sign Up
+                    </button>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
