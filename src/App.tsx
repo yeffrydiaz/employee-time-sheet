@@ -992,11 +992,11 @@ export default function App() {
   const totalWeeklyHoursNum = parseFloat(totalHours) || 0;
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-slate-900 py-4 sm:py-8 px-2 sm:px-6 lg:px-8 print:bg-white pdf:bg-white print:py-0 pdf:py-0 print:px-0 pdf:px-0">
+    <main className="min-h-screen bg-gray-50 dark:bg-slate-900 py-4 sm:py-8 px-2 sm:px-6 lg:px-8 print:bg-white pdf:bg-white print:py-0 pdf:py-0 print:px-0 pdf:px-0">
       <div id="timesheet-content" className="max-w-5xl print:max-w-full pdf:max-w-full mx-auto space-y-4 sm:space-y-6">
         
         {/* Header Actions - Hidden when printing */}
-        <div className="relative z-50 flex flex-col md:flex-row justify-between items-start gap-4 bg-white/40 dark:bg-slate-800/40 backdrop-blur-md p-4 rounded-xl shadow-sm border border-white/50 dark:border-slate-700/50 print:hidden pdf:hidden">
+        <header className="relative z-50 flex flex-col md:flex-row justify-between items-start gap-4 bg-white/40 dark:bg-slate-800/40 backdrop-blur-md p-4 rounded-xl shadow-sm border border-white/50 dark:border-slate-700/50 print:hidden pdf:hidden">
           <div className="flex items-center gap-3 text-indigo-600 dark:text-indigo-400">
             <div className="bg-indigo-100 dark:bg-indigo-900/50 p-2 rounded-lg">
               <Clock className="w-6 h-6" />
@@ -1180,7 +1180,7 @@ export default function App() {
               </div>
             )}
           </div>
-        </div>
+        </header>
 
         {/* Main Form Document */}
         <div className="bg-white/60 dark:bg-slate-800/60 backdrop-blur-xl shadow-xl rounded-2xl overflow-hidden border border-white/50 dark:border-slate-700/50 print:shadow-none pdf:shadow-none print:border-none pdf:border-none print:rounded-none pdf:rounded-none print:bg-white pdf:bg-white">
@@ -2071,6 +2071,6 @@ export default function App() {
           )}
         </AnimatePresence>
       </div>
-    </div>
+    </main>
   );
 }
