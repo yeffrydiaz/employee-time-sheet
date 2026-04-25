@@ -257,7 +257,7 @@ export default function App() {
         const token = await new Promise<string>((resolve, reject) => {
           (window as any).grecaptcha.enterprise.ready(async () => {
             try {
-              const result = await (window as any).grecaptcha.enterprise.execute('6Lc1QcUsAAAAAB7EjZgWtJljysfy7EvkeR1scH8N', {action});
+              const result = await (window as any).grecaptcha.enterprise.execute(import.meta.env.VITE_RECAPTCHA_SITE_KEY, {action});
               resolve(result);
             } catch (e) {
               reject(e);
@@ -269,11 +269,14 @@ export default function App() {
           event: {
             token,
             expectedAction: action || "LOGIN",
-            siteKey: "6Lc1QcUsAAAAAB7EjZgWtJljysfy7EvkeR1scH8N"
+            siteKey: import.meta.env.VITE_RECAPTCHA_SITE_KEY
           }
         };
 
-        const response = await fetch('https://recaptchaenterprise.googleapis.com/v1/projects/webnow10101/assessments?key=AIzaSyAH1TKdnq8XLAUHTzDjFnoXf7DIemunZUo', {
+        const projectId = import.meta.env.VITE_GOOGLE_CLOUD_PROJECT_ID || 'webnow10101';
+        const apiKey = import.meta.env.VITE_RECAPTCHA_API_KEY;
+
+        const response = await fetch(`https://recaptchaenterprise.googleapis.com/v1/projects/${projectId}/assessments?key=${apiKey}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(requestBody)
