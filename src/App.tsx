@@ -304,7 +304,14 @@ export default function App() {
       await signInWithPopup(auth, googleProvider);
       setShowAuthModal(false);
     } catch (err: any) {
-      setAuthError(err.message);
+      console.error("Google Auth Error details:", err);
+      if (err.code === 'auth/unauthorized-domain') {
+        setAuthError('Domain not authorized in Firebase. If you just added it, it might take a few minutes to propagate.');
+      } else if (err.code === 'auth/popup-closed-by-user') {
+        setAuthError('Sign-in popup was closed before completion. Please try again.');
+      } else {
+        setAuthError(`Google Sign-In Error: ${err.message}`);
+      }
     } finally {
       setIsAuthenticating(false);
     }
