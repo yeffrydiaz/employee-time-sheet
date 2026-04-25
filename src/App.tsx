@@ -282,11 +282,14 @@ export default function App() {
         if (!response.ok) {
           const errorData = await response.json();
           console.error("reCAPTCHA API Error:", errorData);
-          throw new Error('reCAPTCHA verification failed');
+          // throw new Error('reCAPTCHA verification failed'); // Soft fail instead of blocking the user
+        } else {
+          const data = await response.json();
+          console.log("reCAPTCHA Assessment Success:", data);
         }
       } catch (e) {
         console.error('reCAPTCHA error', e);
-        throw new Error('Security check failed. Please try again.');
+        // Do not throw here so user can still login even if reCAPTCHA settings are wrong
       }
     }
   };

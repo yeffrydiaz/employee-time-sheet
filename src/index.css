@@ -145,3 +145,7 @@ body {
   -moz-appearance: none !important;
   appearance: none !important;
 }
+
+.grecaptcha-badge { 
+  visibility: hidden;
+}
