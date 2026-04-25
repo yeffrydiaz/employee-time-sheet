@@ -110,6 +110,17 @@ const loadSavedData = (company: string) => {
 export default function App() {
   const initialCompany = getInitialCompany();
   const savedData = loadSavedData(initialCompany);
+
+  useEffect(() => {
+    const siteKey = import.meta.env.VITE_RECAPTCHA_SITE_KEY;
+    if (siteKey && !document.querySelector(`script[src*="recaptcha/enterprise.js"]`)) {
+      const script = document.createElement('script');
+      script.src = `https://www.google.com/recaptcha/enterprise.js?render=${siteKey}`;
+      script.async = true;
+      script.defer = true;
+      document.head.appendChild(script);
+    }
+  }, []);
   
   const [companyName, setCompanyName] = useState(initialCompany);
   const [companies, setCompanies] = useState<string[]>(() => {
@@ -544,9 +555,23 @@ export default function App() {
     setTotalHours(weeklyTotal > 0 ? weeklyTotal.toFixed(2) : '');
   }, [records]);
 
-  // Update document title for printing
+  // Update document title for printing to set a good default filename
   useEffect(() => {
-    document.title = `Timesheet_${name || 'Employee'}_${weekOf || 'Week'}`.replace(/\s+/g, '_');
+    const originalTitle = document.title;
+    const setPrintTitle = () => {
+      document.title = `Timesheet_${name || 'Employee'}_${weekOf || 'Week'}`.replace(/\s+/g, '_');
+    };
+    const restoreTitle = () => {
+      document.title = originalTitle;
+    };
+
+    window.addEventListener('beforeprint', setPrintTitle);
+    window.addEventListener('afterprint', restoreTitle);
+
+    return () => {
+      window.removeEventListener('beforeprint', setPrintTitle);
+      window.removeEventListener('afterprint', restoreTitle);
+    };
   }, [name, weekOf]);
 
   const calculateRowHours = (record: DailyRecord) => {
@@ -716,7 +741,6 @@ export default function App() {
         // Ensure the background color matches the current theme
         backgroundColor: isDarkMode ? '#0f172a' : '#ffffff',
         width: 800,
-        windowWidth: 800,
         style: {
           width: '800px',
           maxWidth: '800px',
@@ -959,9 +983,10 @@ export default function App() {
     }
   };
 
-  const deleteHistoryItem = (week: string, e: React.MouseEvent) => {
+  const deleteHistoryItem = async (week: string, e: React.MouseEvent) => {
     e.stopPropagation();
     try {
+      const token = user ? await auth.currentUser?.getIdToken() : null;
       const historyKey = `${HISTORY_STORAGE_KEY_PREFIX}${companyName}`;
       let historyStr = localStorage.getItem(historyKey);
       if (!historyStr && companyName === 'Royal Transportation') {
