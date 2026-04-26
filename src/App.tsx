@@ -628,51 +628,63 @@ export default function App() {
     
     const isValidTime = (t: string | undefined) => t ? timeRegex.test(t) : false;
 
-    if (record.timeIn && !isValidTime(record.timeIn)) errs.timeIn = "Invalid format (HH:MM)";
-    if (record.lunchStart && !isValidTime(record.lunchStart)) errs.lunchStart = "Invalid format (HH:MM)";
-    if (record.lunchEnd && !isValidTime(record.lunchEnd)) errs.lunchEnd = "Invalid format (HH:MM)";
-    if (record.timeOut && !isValidTime(record.timeOut)) errs.timeOut = "Invalid format (HH:MM)";
+    if (record.timeIn && !isValidTime(record.timeIn)) errs.timeIn = "Invalid format";
+    if (record.lunchStart && !isValidTime(record.lunchStart)) errs.lunchStart = "Invalid format";
+    if (record.lunchEnd && !isValidTime(record.lunchEnd)) errs.lunchEnd = "Invalid format";
+    if (record.timeOut && !isValidTime(record.timeOut)) errs.timeOut = "Invalid format";
     if (record.totalHours && isNaN(Number(record.totalHours))) errs.totalHours = "Must be a number";
     
-    if (isValidTime(record.timeIn) && isValidTime(record.timeOut)) {
-      const parseTime = (timeStr: string) => {
-        const [hours, minutes] = timeStr.split(':').map(Number);
-        return hours + minutes / 60;
-      };
+    const parseTime = (timeStr: string) => {
+      const [hours, minutes] = timeStr.split(':').map(Number);
+      return hours + minutes / 60;
+    };
 
-      const inTime = parseTime(record.timeIn!);
-      let outTime = parseTime(record.timeOut!);
-      if (outTime < inTime) outTime += 24;
+    const tIn = isValidTime(record.timeIn) ? parseTime(record.timeIn!) : null;
+    const tOut = isValidTime(record.timeOut) ? parseTime(record.timeOut!) : null;
+    const lStart = isValidTime(record.lunchStart) ? parseTime(record.lunchStart!) : null;
+    const lEnd = isValidTime(record.lunchEnd) ? parseTime(record.lunchEnd!) : null;
 
-      let lStart = isValidTime(record.lunchStart) ? parseTime(record.lunchStart!) : null;
-      let lEnd = isValidTime(record.lunchEnd) ? parseTime(record.lunchEnd!) : null;
+    let adjustedOut = tOut;
+    if (tIn !== null && tOut !== null && tOut < tIn) {
+      adjustedOut = tOut + 24;
+    }
 
-      if (lStart !== null) {
-        if (lStart < inTime) lStart += 24;
-        if (lStart > outTime) errs.lunchStart = "Must be within work hours";
+    let adjustedLStart = lStart;
+    if (tIn !== null && lStart !== null && lStart < tIn) {
+      adjustedLStart = lStart + 24;
+    }
+
+    let adjustedLEnd = lEnd;
+    if (lEnd !== null) {
+      if (adjustedLStart !== null && lEnd < adjustedLStart) {
+        if ((lEnd + 24) - adjustedLStart > 12) {
+          errs.lunchEnd = "Must be after Lunch Start";
+        } else {
+          adjustedLEnd = lEnd + 24;
+        }
+      } else if (tIn !== null && lEnd < tIn) {
+        adjustedLEnd = lEnd + 24;
       }
+    }
 
-      if (lEnd !== null) {
-        if (lStart !== null) {
-          if (lEnd < lStart) {
-            // If the lunch break appears to be over 12 hours after adjusting for midnight,
-            // it's highly likely the user entered an end time that is before the start time.
-            if ((lEnd + 24) - lStart > 12) {
-              errs.lunchEnd = "Must be after Lunch Start";
-            } else {
-              lEnd += 24;
-            }
-          }
-        } else if (lEnd < inTime) {
-          lEnd += 24;
-        }
-        
-        if (!errs.lunchEnd && lEnd > outTime) {
-          errs.lunchEnd = "Must be within work hours";
-        }
+    if (adjustedLStart !== null) {
+      if (adjustedOut !== null && adjustedLStart > adjustedOut) {
+         errs.lunchStart = "Must be within work hours";
+      }
+    }
+
+    if (adjustedLEnd !== null) {
+      if (adjustedOut !== null && adjustedLEnd > adjustedOut) {
+         if (!errs.lunchEnd) errs.lunchEnd = "Must be within work hours";
       }
     }
     
+    if (adjustedLStart !== null && adjustedLEnd !== null && !errs.lunchEnd) {
+      if (adjustedLEnd < adjustedLStart) {
+         errs.lunchEnd = "Must be after Lunch Start";
+      }
+    }
+
     return errs;
   };
 
@@ -1103,8 +1115,8 @@ export default function App() {
               </div>
             </div>
             
-            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full md:w-auto">
-              <div className="relative w-full sm:w-72" ref={emailContainerRef}>
+            <div className="flex flex-row items-center gap-2 w-full md:w-auto">
+              <div className="relative w-full flex-grow sm:w-72" ref={emailContainerRef}>
                 <input
                   type="text"
                   placeholder="Manager's Email(s)"
@@ -1522,7 +1534,7 @@ export default function App() {
                         value={record.notes || ''}
                         onChange={(e) => handleRecordChange(index, 'notes', e.target.value)}
                         className="w-full text-sm rounded-md shadow-sm border-gray-300 dark:border-slate-600 focus:ring-indigo-500 focus:border-indigo-500 py-1.5 px-2 bg-gray-50/50 dark:bg-slate-800/30 text-gray-900 dark:text-white"
-                        placeholder="Add notes..."
+                        placeholder="e.g., Overtime"
                       />
                     </div>
                   </div>
@@ -1661,7 +1673,7 @@ export default function App() {
                           value={record.notes || ''}
                           onChange={(e) => handleRecordChange(index, 'notes', e.target.value)}
                           className="w-full border-gray-300 dark:border-slate-600 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 text-lg print:text-[10px] pdf:text-[10px] print:border-none pdf:border-none print:bg-transparent pdf:bg-transparent print:shadow-none pdf:shadow-none print:p-0 pdf:p-0 print:min-w-0 pdf:min-w-0 font-bold py-0 px-0 bg-transparent text-gray-900 dark:text-white"
-                          placeholder="..."
+                          placeholder="e.g., Overtime"
                         />
                       </td>
                     </tr>
