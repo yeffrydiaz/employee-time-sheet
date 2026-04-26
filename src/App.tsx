@@ -1085,17 +1085,10 @@ export default function App() {
                 )}
                 <button
                   onClick={() => setIsSettingsOpen(true)}
-                  className="flex-1 sm:flex-none flex justify-center items-center gap-2 px-3 py-1.5 text-sm font-medium text-gray-700 dark:text-slate-200 bg-white dark:bg-slate-800 border border-gray-300 dark:border-slate-600 rounded-lg hover:bg-gray-50 dark:hover:bg-slate-700 transition-colors"
+                  className="flex justify-center items-center p-1.5 w-9 h-9 text-sm font-medium text-gray-700 dark:text-slate-200 bg-white dark:bg-slate-800 border border-gray-300 dark:border-slate-600 rounded-lg hover:bg-gray-50 dark:hover:bg-slate-700 transition-colors"
+                  title="Settings"
                 >
-                  <Settings className="w-4 h-4" />
-                  Settings
-                </button>
-                <button
-                  onClick={openHistory}
-                  className="flex-1 sm:flex-none flex justify-center items-center gap-2 px-3 py-1.5 text-sm font-medium text-gray-700 dark:text-slate-200 bg-white dark:bg-slate-800 border border-gray-300 dark:border-slate-600 rounded-lg hover:bg-gray-50 dark:hover:bg-slate-700 transition-colors"
-                >
-                  <History className="w-4 h-4" />
-                  History
+                  <Settings className="w-5 h-5" />
                 </button>
                 <button
                   onClick={handlePrint}
@@ -1932,6 +1925,16 @@ export default function App() {
                 <div className="pt-6 border-t border-gray-100 dark:border-slate-700/50">
                   <h4 className="text-sm font-medium text-gray-900 dark:text-white mb-4">General Actions</h4>
                   <div className="flex flex-col gap-3">
+                    <button
+                      onClick={() => {
+                        setIsSettingsOpen(false);
+                        openHistory();
+                      }}
+                      className="flex justify-center items-center gap-2 px-4 py-2 text-sm font-medium text-gray-700 dark:text-slate-200 bg-white dark:bg-slate-800 border border-gray-300 dark:border-slate-600 rounded-lg hover:bg-gray-50 dark:hover:bg-slate-700 transition-colors w-full"
+                    >
+                      <History className="w-4 h-4" />
+                      View Timesheet History
+                    </button>
                     {user && (
                       <button
                         onClick={() => {
