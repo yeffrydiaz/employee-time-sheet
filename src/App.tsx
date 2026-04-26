@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Mail, Printer, Calculator, RefreshCw, Save, Loader2, History, Search, X, ChevronRight, Trash2, CheckCircle2, ChevronDown, User, LogOut, Moon, Sun, Clock, Settings, Check } from 'lucide-react';
+import { Mail, Printer, Calculator, RefreshCw, Save, Loader2, History, Search, X, ChevronRight, Trash2, CheckCircle2, ChevronDown, User, LogOut, Moon, Sun, Clock, Settings, Check, Calendar } from 'lucide-react';
 import SignatureCanvas from 'react-signature-canvas';
 import { motion, AnimatePresence } from 'motion/react';
 import jsPDF from 'jspdf';
@@ -1395,21 +1395,15 @@ export default function App() {
                   {/* Header: Day and Date */}
                   <div className="flex justify-between items-center border-b border-gray-100 dark:border-slate-700/50 pb-2">
                     <h3 className="font-semibold text-gray-900 dark:text-white">{record.day}</h3>
-                    <input
-                      type="text"
-                      value={record.date ? record.date.split('-')[2] : ''}
-                      onChange={(e) => {
-                        const day = e.target.value;
-                        if (record.date) {
-                          const parts = record.date.split('-');
-                          handleRecordChange(index, 'date', `${parts[0]}-${parts[1]}-${day.padStart(2, '0')}`);
-                        } else {
-                          const today = new Date();
-                          handleRecordChange(index, 'date', `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${day.padStart(2, '0')}`);
-                        }
-                      }}
-                      className="text-sm border-gray-300 dark:border-slate-600 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 py-1 px-2 bg-white/50 dark:bg-slate-800/50 text-gray-900 dark:text-white w-16 text-center"
-                    />
+                    <div className="relative">
+                      <input
+                        type="date"
+                        value={record.date || ''}
+                        onChange={(e) => handleRecordChange(index, 'date', e.target.value)}
+                        className="text-sm border border-gray-300 dark:border-slate-600 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 py-1 pl-8 min-h-[32px] pr-2 bg-white dark:bg-slate-800 text-gray-900 dark:text-white w-36"
+                      />
+                      <Calendar className="w-4 h-4 text-gray-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                    </div>
                   </div>
                   
                   {/* Times Grid */}
@@ -1433,7 +1427,7 @@ export default function App() {
                         type="time"
                         value={record.timeIn || ''}
                         onChange={(e) => handleRecordChange(index, 'timeIn', e.target.value)}
-                        className={`text-sm rounded-md shadow-sm py-1.5 px-2 bg-white/50 dark:bg-slate-800/50 text-gray-900 dark:text-white ${errors.timeIn ? 'border-red-500 focus:ring-red-500' : 'border-gray-300 dark:border-slate-600 focus:ring-indigo-500'}`}
+                        className={`text-sm rounded-md shadow-sm border py-1.5 px-2 bg-white dark:bg-slate-800 text-gray-900 dark:text-white ${errors.timeIn ? 'border-red-500 focus:ring-red-500' : 'border-gray-300 dark:border-slate-600 focus:ring-indigo-500'}`}
                       />
                       {errors.timeIn && <p className="text-[10px] text-red-500 mt-0.5">{errors.timeIn}</p>}
                     </div>
@@ -1456,7 +1450,7 @@ export default function App() {
                         type="time"
                         value={record.timeOut || ''}
                         onChange={(e) => handleRecordChange(index, 'timeOut', e.target.value)}
-                        className={`text-sm rounded-md shadow-sm py-1.5 px-2 bg-white/50 dark:bg-slate-800/50 text-gray-900 dark:text-white ${errors.timeOut ? 'border-red-500 focus:ring-red-500' : 'border-gray-300 dark:border-slate-600 focus:ring-indigo-500'}`}
+                        className={`text-sm rounded-md shadow-sm border py-1.5 px-2 bg-white dark:bg-slate-800 text-gray-900 dark:text-white ${errors.timeOut ? 'border-red-500 focus:ring-red-500' : 'border-gray-300 dark:border-slate-600 focus:ring-indigo-500'}`}
                       />
                       {errors.timeOut && <p className="text-[10px] text-red-500 mt-0.5">{errors.timeOut}</p>}
                     </div>
@@ -1479,7 +1473,7 @@ export default function App() {
                         type="time"
                         value={record.lunchStart || ''}
                         onChange={(e) => handleRecordChange(index, 'lunchStart', e.target.value)}
-                        className={`text-sm rounded-md shadow-sm py-1.5 px-2 bg-white/50 dark:bg-slate-800/50 text-gray-900 dark:text-white ${errors.lunchStart ? 'border-red-500 focus:ring-red-500' : 'border-gray-300 dark:border-slate-600 focus:ring-indigo-500'}`}
+                        className={`text-sm rounded-md shadow-sm border py-1.5 px-2 bg-white dark:bg-slate-800 text-gray-900 dark:text-white ${errors.lunchStart ? 'border-red-500 focus:ring-red-500' : 'border-gray-300 dark:border-slate-600 focus:ring-indigo-500'}`}
                       />
                       {errors.lunchStart && <p className="text-[10px] text-red-500 mt-0.5">{errors.lunchStart}</p>}
                     </div>
@@ -1502,7 +1496,7 @@ export default function App() {
                         type="time"
                         value={record.lunchEnd || ''}
                         onChange={(e) => handleRecordChange(index, 'lunchEnd', e.target.value)}
-                        className={`text-sm rounded-md shadow-sm py-1.5 px-2 bg-white/50 dark:bg-slate-800/50 text-gray-900 dark:text-white ${errors.lunchEnd ? 'border-red-500 focus:ring-red-500' : 'border-gray-300 dark:border-slate-600 focus:ring-indigo-500'}`}
+                        className={`text-sm rounded-md shadow-sm border py-1.5 px-2 bg-white dark:bg-slate-800 text-gray-900 dark:text-white ${errors.lunchEnd ? 'border-red-500 focus:ring-red-500' : 'border-gray-300 dark:border-slate-600 focus:ring-indigo-500'}`}
                       />
                       {errors.lunchEnd && <p className="text-[10px] text-red-500 mt-0.5">{errors.lunchEnd}</p>}
                     </div>
