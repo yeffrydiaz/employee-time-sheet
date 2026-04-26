@@ -168,6 +168,7 @@ export default function App() {
   const [historyData, setHistoryData] = useState<Record<string, any>>({});
   const [showClearConfirm, setShowClearConfirm] = useState(false);
   const [showEmailConfirm, setShowEmailConfirm] = useState(false);
+  const [itemToDelete, setItemToDelete] = useState<{week: string, e?: React.MouseEvent} | null>(null);
   const [showSavedIndicator, setShowSavedIndicator] = useState(false);
   const [isCompanyDropdownOpen, setIsCompanyDropdownOpen] = useState(false);
   const [newCompanyInput, setNewCompanyInput] = useState('');
@@ -983,8 +984,12 @@ export default function App() {
     }
   };
 
-  const deleteHistoryItem = async (week: string, e: React.MouseEvent) => {
-    e.stopPropagation();
+  const confirmDeleteHistoryItem = async () => {
+    if (!itemToDelete) return;
+    const { week } = itemToDelete;
+    // hide modal
+    setItemToDelete(null);
+
     try {
       const token = user ? await auth.currentUser?.getIdToken() : null;
       const historyKey = `${HISTORY_STORAGE_KEY_PREFIX}${companyName}`;
@@ -1006,6 +1011,11 @@ export default function App() {
     } catch (err) {
       console.error('Failed to delete history item', err);
     }
+  };
+
+  const attemptDeleteHistoryItem = (week: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setItemToDelete({ week, e });
   };
 
   const filteredHistory = Object.entries(historyData)
@@ -1767,6 +1777,29 @@ export default function App() {
           </div>
         )}
 
+        {itemToDelete !== null && (
+          <div className="fixed inset-0 bg-black/50 dark:bg-slate-900/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+            <div className="bg-white/90 dark:bg-slate-800/90 backdrop-blur-xl rounded-2xl shadow-2xl max-w-sm w-full p-6 border border-white/20 dark:border-slate-700">
+              <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">Delete Timesheet?</h3>
+              <p className="text-gray-600 dark:text-slate-300 mb-6">Are you sure you want to delete the timesheet for the week of {itemToDelete.week}? This action cannot be undone.</p>
+              <div className="flex justify-end gap-3">
+                <button
+                  onClick={() => setItemToDelete(null)}
+                  className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-slate-200 bg-gray-100 dark:bg-slate-700 rounded-lg hover:bg-gray-200 dark:hover:bg-slate-600 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={confirmDeleteHistoryItem}
+                  className="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 transition-colors"
+                >
+                  Delete
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {isSettingsOpen && (
           <div className="fixed inset-0 bg-black/50 dark:bg-slate-900/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
             <div className="bg-white/90 dark:bg-slate-800/90 backdrop-blur-xl rounded-2xl shadow-2xl max-w-md w-full flex flex-col border border-white/20 dark:border-slate-700">
@@ -1994,7 +2027,7 @@ export default function App() {
                         </div>
                         <div className="flex items-center gap-2">
                           <button
-                            onClick={(e) => deleteHistoryItem(week, e)}
+                            onClick={(e) => attemptDeleteHistoryItem(week, e)}
                             className="p-2 text-gray-400 dark:text-slate-500 hover:text-red-600 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg opacity-0 group-hover:opacity-100 transition-all"
                             title="Delete from history"
                           >
