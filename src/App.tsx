@@ -323,9 +323,11 @@ export default function App() {
       if (err.code === 'auth/unauthorized-domain') {
         setAuthError('Domain not authorized in Firebase. If you just added it, it might take a few minutes to propagate.');
       } else if (err.code === 'auth/popup-closed-by-user') {
-        setAuthError('Sign-in popup was closed before completion. Please try again.');
+        setAuthError('Sign-in popup was closed before completion (or blocked by the environment). Please try again or open the app in a new tab.');
+      } else if (err.message && err.message.includes('Cross-Origin-Opener-Policy')) {
+        setAuthError('Sign-in blocked by preview environment. Please use the "Open in new tab" button to use Google Sign-In.');
       } else {
-        setAuthError(`Google Sign-In Error: ${err.message}`);
+        setAuthError(`Google Sign-In Error: ${err.message}. If using the AI Studio preview, try opening the app in a new tab.`);
       }
     } finally {
       setIsAuthenticating(false);

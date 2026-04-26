@@ -17,5 +17,6 @@ if (!firebaseConfig.apiKey) {
 
 const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
-export const db = getFirestore(app, import.meta.env.VITE_FIREBASE_DATABASE_ID);
+const dbId = import.meta.env.VITE_FIREBASE_DATABASE_ID;
+export const db = getFirestore(app, dbId && dbId !== 'default' ? dbId : undefined);
 export const googleProvider = new GoogleAuthProvider();
