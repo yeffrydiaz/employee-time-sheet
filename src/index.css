@@ -160,8 +160,16 @@ body {
   visibility: hidden;
 }
 
-/* Ensure mobile time inputs never have minutes obscured by browser clock picker icon */
+/* Time inputs: Monospaced font & optimized character spacing to ensure full visibility without truncation */
+input[type="time"].mobile-time-input,
+.time-input-mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace !important;
+  font-variant-numeric: tabular-nums !important;
+  letter-spacing: -0.015em !important;
+}
+
 @media (max-width: 768px) {
+  /* Prevent browser clock picker indicator from covering minutes on mobile */
   input[type="time"].mobile-time-input::-webkit-calendar-picker-indicator {
     display: none !important;
     -webkit-appearance: none !important;
@@ -177,8 +185,33 @@ body {
     -webkit-appearance: none !important;
     -moz-appearance: textfield !important;
     appearance: none !important;
-    padding-left: 2px !important;
-    padding-right: 2px !important;
-    font-variant-numeric: tabular-nums;
+    padding-left: 0px !important;
+    padding-right: 0px !important;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace !important;
+    font-variant-numeric: tabular-nums !important;
+    letter-spacing: -0.015em !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    box-sizing: border-box !important;
+    text-align: center !important;
+  }
+
+  input[type="time"].mobile-time-input::-webkit-datetime-edit,
+  input[type="time"].mobile-time-input::-webkit-datetime-edit-fields-wrapper {
+    display: inline-flex !important;
+    justify-content: center !important;
+    align-items: center !important;
+    text-align: center !important;
+    padding: 0 !important;
+    margin: 0 auto !important;
+  }
+
+  input[type="time"].mobile-time-input::-webkit-datetime-edit-text,
+  input[type="time"].mobile-time-input::-webkit-datetime-edit-hour-field,
+  input[type="time"].mobile-time-input::-webkit-datetime-edit-minute-field,
+  input[type="time"].mobile-time-input::-webkit-datetime-edit-ampm-field {
+    padding: 0 0.5px !important;
+    font-variant-numeric: tabular-nums !important;
+    font-family: inherit !important;
   }
 }

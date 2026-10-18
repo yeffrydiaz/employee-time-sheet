@@ -27,7 +27,8 @@ import {
   PenTool,
   Type,
   AlertTriangle,
-  ArrowDown
+  ArrowDown,
+  Copy
 } from 'lucide-react';
 import SignatureCanvas from 'react-signature-canvas';
 import { motion, AnimatePresence } from 'motion/react';
@@ -524,10 +525,32 @@ export default function App() {
     return now.toTimeString().slice(0, 5);
   };
 
+  const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
+
   const handleRecordChange = (index: number, field: keyof DailyRecord, value: string) => {
     const updated = [...records];
     updated[index] = { ...updated[index], [field]: value };
     setRecords(updated);
+  };
+
+  const copyPreviousDay = (index: number) => {
+    if (index <= 0 || index >= records.length) return;
+    const prev = records[index - 1];
+    const updated = [...records];
+    const updatedRecord = {
+      ...updated[index],
+      timeIn: prev.timeIn,
+      lunchStart: prev.lunchStart,
+      lunchEnd: prev.lunchEnd,
+      timeOut: prev.timeOut,
+    };
+    updatedRecord.totalHours = calculateRowHours(updatedRecord);
+    updated[index] = updatedRecord;
+    setRecords(updated);
+    setCopiedIndex(index);
+    setTimeout(() => {
+      setCopiedIndex(current => (current === index ? null : current));
+    }, 1500);
   };
 
   const toggleAccordion = (index: number) => {
@@ -711,11 +734,6 @@ export default function App() {
     // Time Out entered without Time In
     if (tIn === null && tOut !== null) {
       return 'Time Out entered without Time In';
-    }
-
-    // Time In entered without Time Out
-    if (tIn !== null && tOut === null) {
-      return 'Shift in progress (missing Time Out)';
     }
 
     // Time Out earlier than Time In
@@ -1480,15 +1498,16 @@ export default function App() {
                       <div className="flex items-center gap-2">
                         {dayWarning ? (
                           <span className="text-xs font-bold bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-300 px-2 py-1 rounded-lg flex items-center gap-1" title={dayWarning}>
-                            <AlertTriangle className="w-3 h-3 text-amber-600 dark:text-amber-400 flex-shrink-0" />
+                            <AlertTriangle className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 flex-shrink-0" />
                             <span>{record.totalHours && parseFloat(record.totalHours) > 0 ? `${record.totalHours} hrs` : 'Check hrs'}</span>
                           </span>
                         ) : record.totalHours && parseFloat(record.totalHours) > 0 ? (
-                          <span className="text-xs font-black bg-indigo-50 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300 px-2 py-1 rounded-lg">
-                            {record.totalHours} hrs
+                          <span className="text-xs font-black bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 px-2 py-1 rounded-lg flex items-center gap-1.5 border border-emerald-200/60 dark:border-emerald-800/60" title="Valid shift entry">
+                            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 flex-shrink-0" />
+                            <span>{record.totalHours} hrs</span>
                           </span>
                         ) : (
-                          <span className="text-xs text-gray-400 dark:text-slate-500">
+                          <span className="text-xs text-gray-400 dark:text-slate-500 font-medium">
                             0.00 hrs
                           </span>
                         )}
@@ -1518,20 +1537,47 @@ export default function App() {
                     {/* Expanded Content */}
                     {isExpanded && (
                       <div className="p-3.5 pt-0 space-y-3.5 border-t border-gray-100 dark:border-slate-700/60">
-                        {/* Date Picker row */}
-                        <div className="flex items-center justify-between gap-2 pt-2">
-                          <label className="text-xs font-bold uppercase tracking-wider text-gray-600 dark:text-slate-400">
-                            Date
-                          </label>
-                          <input
-                            type="date"
-                            value={record.date}
-                            onChange={e => handleRecordChange(index, 'date', e.target.value)}
-                            className="min-h-[44px] px-3 py-1.5 text-base font-bold bg-white dark:bg-slate-900 border border-gray-300 dark:border-slate-600 rounded-xl text-gray-900 dark:text-white"
-                          />
+                        {/* Date Picker & Copy Previous Day row */}
+                        <div className="pt-2 flex items-center justify-between gap-2 flex-wrap sm:flex-nowrap">
+                          <div className="flex items-center gap-2">
+                            <label className="text-xs font-bold uppercase tracking-wider text-gray-600 dark:text-slate-400">
+                              Date
+                            </label>
+                            <input
+                              type="date"
+                              value={record.date}
+                              onChange={e => handleRecordChange(index, 'date', e.target.value)}
+                              className="min-h-[44px] px-2.5 py-1 text-sm font-bold bg-white dark:bg-slate-900 border border-gray-300 dark:border-slate-600 rounded-xl text-gray-900 dark:text-white"
+                            />
+                          </div>
+
+                          {index > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => copyPreviousDay(index)}
+                              className={`min-h-[44px] px-3 py-1 text-xs font-bold rounded-xl transition-all active:scale-95 flex items-center gap-1.5 border shadow-2xs ${
+                                copiedIndex === index
+                                  ? 'bg-emerald-50 text-emerald-700 border-emerald-300 dark:bg-emerald-950/60 dark:text-emerald-300 dark:border-emerald-700'
+                                  : 'bg-indigo-50 hover:bg-indigo-100 text-indigo-700 dark:bg-indigo-950/50 dark:hover:bg-indigo-900/60 dark:text-indigo-300 border-indigo-200/80 dark:border-indigo-800/80'
+                              }`}
+                              title={`Copy hours from previous day (${records[index - 1].day})`}
+                            >
+                              {copiedIndex === index ? (
+                                <>
+                                  <Check className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                                  <span>Copied ({records[index - 1].day.slice(0, 3)})</span>
+                                </>
+                              ) : (
+                                <>
+                                  <Copy className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+                                  <span>Copy Previous Day</span>
+                                </>
+                              )}
+                            </button>
+                          )}
                         </div>
 
-                        {/* TIME IN & TIME OUT: STRICT PURE WHITE BACKGROUND #FFFFFF */}
+                        {/* TIME IN & TIME OUT: STRICT PURE WHITE BACKGROUND #FFFFFF - HERO TYPOGRAPHY */}
                         <div className="grid grid-cols-2 gap-2 sm:gap-3">
                           {/* TIME IN */}
                           <div className="bg-white dark:bg-slate-900 p-2.5 rounded-xl border border-gray-200 dark:border-slate-700 space-y-1">
@@ -1557,7 +1603,7 @@ export default function App() {
                                 } catch {}
                               }}
                               onChange={e => handleRecordChange(index, 'timeIn', e.target.value)}
-                              className="mobile-time-input w-full min-h-[48px] px-1 text-xl sm:text-2xl font-black text-gray-900 dark:text-white bg-white dark:bg-slate-900 border-none rounded-lg focus:ring-0 p-0 text-center font-mono tracking-tight cursor-pointer"
+                              className="mobile-time-input time-input-mono w-full min-h-[48px] px-0 text-[22px] min-[390px]:text-[24px] sm:text-[26px] font-black text-gray-900 dark:text-white bg-white dark:bg-slate-900 border-none rounded-lg focus:ring-0 p-0 text-center font-mono tabular-nums cursor-pointer leading-none"
                             />
                             {errors.timeIn && <p className="text-xs text-rose-600">{errors.timeIn}</p>}
                           </div>
@@ -1586,7 +1632,7 @@ export default function App() {
                                 } catch {}
                               }}
                               onChange={e => handleRecordChange(index, 'timeOut', e.target.value)}
-                              className="mobile-time-input w-full min-h-[48px] px-1 text-xl sm:text-2xl font-black text-gray-900 dark:text-white bg-white dark:bg-slate-900 border-none rounded-lg focus:ring-0 p-0 text-center font-mono tracking-tight cursor-pointer"
+                              className="mobile-time-input time-input-mono w-full min-h-[48px] px-0 text-[22px] min-[390px]:text-[24px] sm:text-[26px] font-black text-gray-900 dark:text-white bg-white dark:bg-slate-900 border-none rounded-lg focus:ring-0 p-0 text-center font-mono tabular-nums cursor-pointer leading-none"
                             />
                             {errors.timeOut && <p className="text-xs text-rose-600">{errors.timeOut}</p>}
                           </div>
@@ -1618,7 +1664,7 @@ export default function App() {
                                 } catch {}
                               }}
                               onChange={e => handleRecordChange(index, 'lunchStart', e.target.value)}
-                              className="mobile-time-input w-full min-h-[44px] px-1 text-base sm:text-lg font-bold text-gray-900 dark:text-amber-100 bg-[#FEF9C3] dark:bg-transparent border-none rounded-lg focus:ring-0 p-0 text-center font-mono tracking-tight cursor-pointer"
+                              className="mobile-time-input time-input-mono w-full min-h-[44px] px-0 text-base sm:text-[17px] font-bold text-gray-900 dark:text-amber-100 bg-[#FEF9C3] dark:bg-transparent border-none rounded-lg focus:ring-0 p-0 text-center font-mono tabular-nums cursor-pointer leading-none"
                             />
                             {errors.lunchStart && <p className="text-xs text-rose-600">{errors.lunchStart}</p>}
                           </div>
@@ -1647,7 +1693,7 @@ export default function App() {
                                 } catch {}
                               }}
                               onChange={e => handleRecordChange(index, 'lunchEnd', e.target.value)}
-                              className="mobile-time-input w-full min-h-[44px] px-1 text-base sm:text-lg font-bold text-gray-900 dark:text-amber-100 bg-[#FEF9C3] dark:bg-transparent border-none rounded-lg focus:ring-0 p-0 text-center font-mono tracking-tight cursor-pointer"
+                              className="mobile-time-input time-input-mono w-full min-h-[44px] px-0 text-base sm:text-[17px] font-bold text-gray-900 dark:text-amber-100 bg-[#FEF9C3] dark:bg-transparent border-none rounded-lg focus:ring-0 p-0 text-center font-mono tabular-nums cursor-pointer leading-none"
                             />
                             {errors.lunchEnd && <p className="text-xs text-rose-600">{errors.lunchEnd}</p>}
                           </div>
@@ -1656,27 +1702,60 @@ export default function App() {
                         {/* TOTAL HRS & NOTES: STRICT PURE WHITE BACKGROUND #FFFFFF */}
                         <div className="grid grid-cols-3 gap-2 sm:gap-3 pt-1">
                           {/* TOTAL HRS */}
-                          <div className={`bg-white dark:bg-slate-900 p-2.5 rounded-xl border ${dayWarning ? 'border-amber-300 dark:border-amber-600 ring-1 ring-amber-300/40 bg-amber-50/20' : 'border-gray-200 dark:border-slate-700'} space-y-1 relative`}>
+                          <div className={`bg-white dark:bg-slate-900 p-2.5 rounded-xl border ${
+                            dayWarning 
+                              ? 'border-amber-300 dark:border-amber-600 ring-1 ring-amber-300/40 bg-amber-50/20' 
+                              : record.totalHours && parseFloat(record.totalHours) > 0
+                              ? 'border-emerald-300 dark:border-emerald-700 ring-1 ring-emerald-400/20'
+                              : 'border-gray-200 dark:border-slate-700'
+                          } space-y-1 relative`}>
                             <div className="flex items-center justify-between">
-                              <span className="text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-slate-400 block">
+                              <span className="text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-slate-400">
                                 Total Hrs
                               </span>
-                              {dayWarning && (
-                                <span className="text-amber-600 dark:text-amber-400 cursor-help" title={dayWarning}>
-                                  <AlertTriangle className="w-3.5 h-3.5" />
+                              {dayWarning ? (
+                                <span className="inline-flex items-center gap-1 text-[11px] font-bold text-amber-600 dark:text-amber-400 cursor-help" title={dayWarning}>
+                                  <AlertTriangle className="w-3.5 h-3.5 text-amber-500 flex-shrink-0" />
+                                  <span className="hidden sm:inline">Invalid</span>
                                 </span>
-                              )}
+                              ) : record.totalHours && parseFloat(record.totalHours) > 0 ? (
+                                <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-600 dark:text-emerald-400" title="Valid shift entry">
+                                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 flex-shrink-0" />
+                                  <span className="hidden sm:inline">Valid</span>
+                                </span>
+                              ) : null}
                             </div>
-                            <div className={`text-2xl font-black text-center py-0.5 font-mono ${dayWarning ? 'text-amber-600 dark:text-amber-400' : 'text-gray-900 dark:text-white'}`}>
-                              {record.totalHours || '0.00'}
+                            <div className="flex items-center justify-center gap-1.5 py-0.5">
+                              <span className={`text-2xl font-black font-mono ${
+                                dayWarning 
+                                  ? 'text-amber-600 dark:text-amber-400' 
+                                  : record.totalHours && parseFloat(record.totalHours) > 0
+                                  ? 'text-emerald-700 dark:text-emerald-300'
+                                  : 'text-gray-900 dark:text-white'
+                              }`}>
+                                {record.totalHours || '0.00'}
+                              </span>
+                              {dayWarning ? (
+                                <span title={dayWarning} className="flex-shrink-0">
+                                  <AlertTriangle className="w-4 h-4 text-amber-500" />
+                                </span>
+                              ) : record.totalHours && parseFloat(record.totalHours) > 0 ? (
+                                <span title="Valid shift entry" className="flex-shrink-0">
+                                  <CheckCircle2 className="w-4 h-4 text-emerald-500" />
+                                </span>
+                              ) : null}
                             </div>
                             {/* Small help text beneath Total Hours */}
-                            {dayWarning && (
+                            {dayWarning ? (
                               <p className="text-[11px] leading-tight text-amber-700 dark:text-amber-300 font-semibold text-center flex items-center justify-center gap-0.5 pt-0.5" title={dayWarning}>
                                 <AlertTriangle className="w-3 h-3 flex-shrink-0 text-amber-600 inline" />
                                 <span className="truncate">Check times</span>
                               </p>
-                            )}
+                            ) : record.totalHours && parseFloat(record.totalHours) > 0 ? (
+                              <p className="text-[11px] leading-tight text-emerald-600 dark:text-emerald-400 font-medium text-center flex items-center justify-center gap-0.5 pt-0.5">
+                                <span>Shift complete</span>
+                              </p>
+                            ) : null}
                           </div>
 
                           {/* NOTES */}
@@ -1791,6 +1870,26 @@ export default function App() {
                           onChange={e => handleRecordChange(index, 'date', e.target.value)}
                           className="mt-0.5 text-xs text-gray-500 dark:text-slate-400 bg-transparent border-none p-0 focus:ring-0"
                         />
+                        {index > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => copyPreviousDay(index)}
+                            className="mt-1 flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-semibold text-indigo-600 hover:text-indigo-800 dark:text-indigo-400 dark:hover:text-indigo-300 hover:bg-indigo-50 dark:hover:bg-indigo-950/50 rounded transition-all active:scale-95 print:hidden pdf:hidden"
+                            title={`Copy time entries from previous day (${records[index - 1].day})`}
+                          >
+                            {copiedIndex === index ? (
+                              <>
+                                <Check className="w-2.5 h-2.5 text-emerald-600" />
+                                <span className="text-emerald-600 font-bold">Copied!</span>
+                              </>
+                            ) : (
+                              <>
+                                <Copy className="w-2.5 h-2.5 text-indigo-500" />
+                                <span>Copy prev</span>
+                              </>
+                            )}
+                          </button>
+                        )}
                         {outOfRange && (
                           <div className="text-[10px] text-amber-600 flex items-center gap-0.5 print:hidden pdf:hidden">
                             <AlertTriangle className="w-3 h-3" />
@@ -1806,7 +1905,7 @@ export default function App() {
                             type="time"
                             value={record.timeIn}
                             onChange={e => handleRecordChange(index, 'timeIn', e.target.value)}
-                            className="w-full text-[26px] font-bold text-gray-900 dark:text-white bg-white dark:bg-slate-900 border-none p-0 focus:ring-0 print:text-[14px] pdf:text-[14px]"
+                            className="time-input-mono w-full text-[28px] font-black font-mono tracking-tight tabular-nums text-gray-900 dark:text-white bg-white dark:bg-slate-900 border-none p-0 focus:ring-0 print:text-[14px] pdf:text-[14px]"
                           />
                           <button
                             type="button"
@@ -1825,7 +1924,7 @@ export default function App() {
                             type="time"
                             value={record.lunchStart}
                             onChange={e => handleRecordChange(index, 'lunchStart', e.target.value)}
-                            className="w-full text-[17px] font-bold text-gray-900 dark:text-amber-100 bg-transparent border-none p-0 focus:ring-0 print:text-[12px] pdf:text-[12px]"
+                            className="time-input-mono w-full text-[17px] font-bold font-mono tracking-tight tabular-nums text-gray-900 dark:text-amber-100 bg-transparent border-none p-0 focus:ring-0 print:text-[12px] pdf:text-[12px]"
                           />
                           <button
                             type="button"
@@ -1844,7 +1943,7 @@ export default function App() {
                             type="time"
                             value={record.lunchEnd}
                             onChange={e => handleRecordChange(index, 'lunchEnd', e.target.value)}
-                            className="w-full text-[17px] font-bold text-gray-900 dark:text-amber-100 bg-transparent border-none p-0 focus:ring-0 print:text-[12px] pdf:text-[12px]"
+                            className="time-input-mono w-full text-[17px] font-bold font-mono tracking-tight tabular-nums text-gray-900 dark:text-amber-100 bg-transparent border-none p-0 focus:ring-0 print:text-[12px] pdf:text-[12px]"
                           />
                           <button
                             type="button"
@@ -1863,7 +1962,7 @@ export default function App() {
                             type="time"
                             value={record.timeOut}
                             onChange={e => handleRecordChange(index, 'timeOut', e.target.value)}
-                            className="w-full text-[26px] font-bold text-gray-900 dark:text-white bg-white dark:bg-slate-900 border-none p-0 focus:ring-0 print:text-[14px] pdf:text-[14px]"
+                            className="time-input-mono w-full text-[28px] font-black font-mono tracking-tight tabular-nums text-gray-900 dark:text-white bg-white dark:bg-slate-900 border-none p-0 focus:ring-0 print:text-[14px] pdf:text-[14px]"
                           />
                           <button
                             type="button"
@@ -1878,19 +1977,30 @@ export default function App() {
                       {/* TOTAL HRS: EXTRA LARGE BOLD, WHITE BACKGROUND */}
                       <td className="px-2 py-2.5 align-middle text-center bg-white dark:bg-slate-900">
                         <div className="flex flex-col items-center justify-center">
-                          <div className="flex items-center justify-center gap-1">
-                            <span className={`text-2xl font-black font-mono print:text-[14px] pdf:text-[14px] ${dayWarning ? 'text-amber-600 dark:text-amber-400' : 'text-gray-900 dark:text-white'}`}>
+                          <div className="flex items-center justify-center gap-1.5">
+                            <span className={`text-2xl font-black font-mono print:text-[14px] pdf:text-[14px] ${
+                              dayWarning ? 'text-amber-600 dark:text-amber-400' : 'text-gray-900 dark:text-white'
+                            }`}>
                               {record.totalHours || '0.00'}
                             </span>
-                            {dayWarning && (
+                            {dayWarning ? (
                               <span className="text-amber-500 cursor-help print:hidden pdf:hidden" title={dayWarning}>
-                                <AlertTriangle className="w-3.5 h-3.5" />
+                                <AlertTriangle className="w-4 h-4" />
                               </span>
-                            )}
+                            ) : record.totalHours && parseFloat(record.totalHours) > 0 ? (
+                              <span className="text-emerald-500 print:hidden pdf:hidden" title="Valid shift entry">
+                                <CheckCircle2 className="w-4 h-4" />
+                              </span>
+                            ) : null}
                           </div>
                           {dayWarning && (
                             <span className="text-[10px] text-amber-600 dark:text-amber-400 font-medium leading-tight print:hidden pdf:hidden max-w-[110px] truncate" title={dayWarning}>
                               {dayWarning}
+                            </span>
+                          )}
+                          {!dayWarning && record.totalHours && parseFloat(record.totalHours) > 0 && (
+                            <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-medium leading-tight print:hidden pdf:hidden flex items-center gap-0.5">
+                              <Check className="w-2.5 h-2.5" /> Valid
                             </span>
                           )}
                         </div>
