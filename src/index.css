@@ -93,24 +93,57 @@ body {
 
 @media print {
   @page {
-    size: portrait;
-    margin: 10mm;
+    size: A4 portrait;
+    margin: 8mm 10mm;
   }
   
-  body {
-    -webkit-print-color-adjust: exact;
-    print-color-adjust: exact;
+  html, body {
+    background: #ffffff !important;
+    color: #0f172a !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+    font-size: 11px !important;
   }
 
-  /* Force the timesheet content to fit horizontally */
-  #timesheet-content {
+  /* Force the timesheet content to fit horizontally and remove dark backgrounds */
+  #timesheet-content,
+  #my-hours-sheet-content {
     width: 100% !important;
     max-width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #ffffff !important;
+    color: #0f172a !important;
   }
 
   /* Ensure the table container doesn't hide overflow during print */
   .print\:overflow-visible {
     overflow: visible !important;
+  }
+
+  /* Compact table rows so 14-day period + signature + totals fit on 1 page */
+  table {
+    width: 100% !important;
+    border-collapse: collapse !important;
+    page-break-inside: auto;
+  }
+
+  tr {
+    page-break-inside: avoid;
+    page-break-after: auto;
+  }
+
+  th, td {
+    padding-top: 3px !important;
+    padding-bottom: 3px !important;
+    border-color: #cbd5e1 !important;
+  }
+
+  /* Preserve strict #FEF9C3 yellow on lunch cells during print */
+  td.bg-\[\#FEF9C3\],
+  th.bg-\[\#FEF9C3\]\/70 {
+    background-color: #FEF9C3 !important;
+    color: #0f172a !important;
   }
 
   /* Hide input icons and spinners for printing and PDF generation to reduce minimum width */
@@ -124,10 +157,12 @@ body {
     -webkit-appearance: none !important;
   }
 
-  input[type="time"], input[type="date"] {
+  input[type="time"], input[type="date"], input[type="text"], input[type="email"] {
     -webkit-appearance: none !important;
     -moz-appearance: none !important;
     appearance: none !important;
+    color: #0f172a !important;
+    background: transparent !important;
   }
 
   input::placeholder {
@@ -165,7 +200,32 @@ input[type="time"].mobile-time-input,
 .time-input-mono {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace !important;
   font-variant-numeric: tabular-nums !important;
-  letter-spacing: -0.015em !important;
+  letter-spacing: -0.02em !important;
+  box-sizing: border-box !important;
+}
+
+.time-input-mono::-webkit-calendar-picker-indicator {
+  width: 15px !important;
+  height: 15px !important;
+  padding: 0 !important;
+  margin-left: 2px !important;
+  opacity: 0.55 !important;
+  cursor: pointer !important;
+  flex-shrink: 0 !important;
+}
+
+.time-input-mono:hover::-webkit-calendar-picker-indicator {
+  opacity: 0.9 !important;
+}
+
+.time-input-mono::-webkit-datetime-edit-fields-wrapper {
+  padding: 0 !important;
+}
+
+.time-input-mono::-webkit-datetime-edit-hour-field,
+.time-input-mono::-webkit-datetime-edit-minute-field,
+.time-input-mono::-webkit-datetime-edit-ampm-field {
+  padding: 0 1px !important;
 }
 
 @media (max-width: 768px) {
@@ -215,3 +275,44 @@ input[type="time"].mobile-time-input,
     font-family: inherit !important;
   }
 }
+
+@keyframes todayRowGlow {
+  0%, 100% {
+    box-shadow: inset 0 0 0 1.5px rgba(79, 70, 229, 0.6), 0 0 12px rgba(79, 70, 229, 0.22);
+  }
+  50% {
+    box-shadow: inset 0 0 0 2px rgba(99, 102, 241, 0.95), 0 0 22px rgba(79, 70, 229, 0.45);
+  }
+}
+
+@keyframes todayRowGlowDark {
+  0%, 100% {
+    box-shadow: inset 0 0 0 1.5px rgba(129, 140, 248, 0.6), 0 0 14px rgba(99, 102, 241, 0.28);
+  }
+  50% {
+    box-shadow: inset 0 0 0 2px rgba(165, 180, 252, 0.95), 0 0 24px rgba(129, 140, 248, 0.5);
+  }
+}
+
+.today-row-glow {
+  position: relative;
+  z-index: 10;
+  animation: todayRowGlow 2.8s ease-in-out infinite;
+}
+
+.dark .today-row-glow {
+  animation: todayRowGlowDark 2.8s ease-in-out infinite;
+}
+
+.pdf-mode .today-row-glow {
+  animation: none !important;
+  box-shadow: none !important;
+}
+
+@media print {
+  .today-row-glow {
+    animation: none !important;
+    box-shadow: none !important;
+  }
+}
+

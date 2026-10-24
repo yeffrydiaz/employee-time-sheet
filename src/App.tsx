@@ -28,12 +28,13 @@ import {
   Type,
   AlertTriangle,
   ArrowDown,
-  Copy
+  Copy,
+  Download,
+  Wrench
 } from 'lucide-react';
 import SignatureCanvas from 'react-signature-canvas';
 import { motion, AnimatePresence } from 'motion/react';
 import jsPDF from 'jspdf';
-import { toPng } from 'html-to-image';
 import { auth, db, googleProvider } from './firebase';
 import {
   signInWithPopup,
@@ -52,6 +53,28 @@ import {
   query,
   where
 } from 'firebase/firestore';
+import AuthScreen from './components/AuthScreen';
+import PunchClockScreen from './components/PunchClockScreen';
+import MyHoursScreen from './components/MyHoursScreen';
+import AdminConsole from './components/AdminConsole';
+import {
+  getCurrentSessionUser,
+  syncDailyOvertimeMode,
+  syncOvertimeCalculationMode,
+  syncPublicHolidaySettings,
+} from './services/dataStore';
+import {
+  addCustomHoliday,
+  buildHolidayMapForDates,
+  fetchPublicHolidaysFromAPI,
+  getCustomHolidays,
+  HolidayCountryCode,
+  PublicHoliday,
+  removeCustomHoliday,
+  SUPPORTED_HOLIDAY_COUNTRIES,
+} from './services/holidays';
+import { AppUser, Company } from './types/timeclock';
+import { generateVectorTimesheetPDF, triggerPrintAndDownloadPDF } from './services/pdfExport';
 
 export interface DailyRecord {
   day: string;
@@ -100,6 +123,37 @@ const formatPeriodRange = (startDateStr: string, period: string) => {
     return `${startMonth} ${start.getDate()} – ${end.getDate()}, ${end.getFullYear()}`;
   }
   return `${startMonth} ${start.getDate()} – ${endMonth} ${end.getDate()}, ${end.getFullYear()}`;
+};
+
+const formatDateSmartYear = (dateStr: string) => {
+  if (!dateStr || !dateStr.includes('-')) return dateStr || '';
+  const [y, m, d] = dateStr.split('-').map(Number);
+  if (!y || !m || !d) return dateStr;
+  const currentYear = new Date().getFullYear();
+  const dt = new Date(y, m - 1, d);
+  const monthShort = dt.toLocaleDateString('en-US', { month: 'short' });
+  if (y !== currentYear) {
+    return `${monthShort} ${d}, ${y}`;
+  }
+  return `${monthShort} ${d}`;
+};
+
+const getSmartDateParts = (dateStr: string) => {
+  if (!dateStr || !dateStr.includes('-')) {
+    return { monthShort: '', dayNum: dateStr || '', yearSuffix: '' };
+  }
+  const [y, m, d] = dateStr.split('-').map(Number);
+  if (!y || !m || !d) {
+    return { monthShort: '', dayNum: dateStr, yearSuffix: '' };
+  }
+  const currentYear = new Date().getFullYear();
+  const dt = new Date(y, m - 1, d);
+  const monthShort = dt.toLocaleDateString('en-US', { month: 'short' });
+  return {
+    monthShort,
+    dayNum: String(d),
+    yearSuffix: y !== currentYear ? `, ${y}` : '',
+  };
 };
 
 const generateRecordsForPeriod = (period: string, startDateStr: string, existingRecords: DailyRecord[]) => {
@@ -198,7 +252,7 @@ const renderTypedSignatureImage = (typedName: string, isDark: boolean): string =
   return canvas.toDataURL('image/png');
 };
 
-export default function App() {
+function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => void }) {
   const initialCompany = getInitialCompany();
   const savedData = loadSavedData(initialCompany);
 
@@ -240,7 +294,16 @@ export default function App() {
       lunchEnd: '13:00',
       endTime: '17:00',
       enabled: true,
-      period: 'Bi-weekly' // Default 14 days
+      period: 'Bi-weekly', // Default 14 days
+      autoLunchEnabled: true,
+      autoLunchDurationMins: 30, // e.g., 30 or 60 mins
+      autoLunchMinShiftHours: 6, // shifts longer than 6 hours
+      excessiveBreakAlertEnabled: true,
+      maxBreakMinutes: 120, // alert if single-day break exceeds 120 mins
+      calculateOvertimeWeekly: true, // calculate overtime weekly (>40h/wk) by default
+      calculateDailyOvertime: false, // calculate daily overtime (>8h/day)
+      highlightPublicHolidays: true, // automatically highlight/mark public holidays in timesheet view
+      holidayCountry: 'US' as HolidayCountryCode // default country for public holidays
     };
     try {
       const saved = localStorage.getItem('shift_settings');
@@ -286,6 +349,69 @@ export default function App() {
   }, [records, todayDateStr]);
 
   const [expandedDays, setExpandedDays] = useState<number[]>([todayRecordIndex]);
+
+  // Public Holidays state (Predefined + Live Nager.Date API + Custom dates)
+  const [customHolidays, setCustomHolidays] = useState<PublicHoliday[]>(() => getCustomHolidays());
+  const [holidayApiTick, setHolidayApiTick] = useState(0);
+  const [isSyncingHolidays, setIsSyncingHolidays] = useState(false);
+  const [holidaySyncSource, setHolidaySyncSource] = useState<'predefined' | 'api'>('predefined');
+  const [newCustomHolidayDate, setNewCustomHolidayDate] = useState('');
+  const [newCustomHolidayName, setNewCustomHolidayName] = useState('');
+
+  const highlightPublicHolidays = shiftSettings.highlightPublicHolidays !== false;
+  const holidayCountry: HolidayCountryCode = (shiftSettings.holidayCountry as HolidayCountryCode) || 'US';
+
+  const syncHolidaysFromApi = useCallback(
+    async (country: HolidayCountryCode, showToast = false) => {
+      setIsSyncingHolidays(true);
+      try {
+        const years = Array.from(
+          new Set([
+            new Date().getFullYear(),
+            ...records
+              .map(r => (r.date && r.date.length >= 4 ? parseInt(r.date.slice(0, 4), 10) : NaN))
+              .filter(y => !isNaN(y)),
+          ])
+        );
+        const results = await Promise.all(
+          years.map(yr => fetchPublicHolidaysFromAPI(yr, country))
+        );
+        const anyFromApi = results.some(r => r.fromApi);
+        setHolidaySyncSource(anyFromApi ? 'api' : 'predefined');
+        setHolidayApiTick(t => t + 1);
+      } finally {
+        setIsSyncingHolidays(false);
+      }
+    },
+    [records]
+  );
+
+  useEffect(() => {
+    if (highlightPublicHolidays) {
+      syncHolidaysFromApi(holidayCountry, false);
+    }
+  }, [highlightPublicHolidays, holidayCountry, periodStart]);
+
+  const holidayMap = useMemo(() => {
+    if (!highlightPublicHolidays) return {} as Record<string, PublicHoliday>;
+    return buildHolidayMapForDates(
+      records.map(r => r.date),
+      holidayCountry,
+      customHolidays
+    );
+  }, [highlightPublicHolidays, holidayCountry, records, customHolidays, holidayApiTick]);
+
+  const periodHolidays = useMemo(() => {
+    if (!highlightPublicHolidays) return [] as Array<{ recordIndex: number; day: string; holiday: PublicHoliday }>;
+    const found: Array<{ recordIndex: number; day: string; holiday: PublicHoliday }> = [];
+    records.forEach((r, idx) => {
+      const h = holidayMap[r.date];
+      if (h) {
+        found.push({ recordIndex: idx, day: r.day, holiday: h });
+      }
+    });
+    return found;
+  }, [highlightPublicHolidays, records, holidayMap]);
 
   // Auth states
   const [user, setUser] = useState<FirebaseUser | null>(null);
@@ -394,37 +520,133 @@ export default function App() {
     return () => unsubscribe();
   }, [companyName]);
 
+  // Check whether automatic default lunch break applies to a row (shift > 6h and no lunch recorded)
+  const isAutoLunchApplied = useCallback(
+    (record: DailyRecord) => {
+      if (!shiftSettings.autoLunchEnabled) return false;
+      if (!record.timeIn || !record.timeOut) return false;
+      if (record.lunchStart || record.lunchEnd) return false;
+
+      const parseTime = (timeStr: string) => {
+        if (!timeStr) return 0;
+        const [h, m] = timeStr.split(':').map(Number);
+        return h + m / 60;
+      };
+
+      const inTime = parseTime(record.timeIn);
+      const outTime = parseTime(record.timeOut);
+      if (outTime <= inTime) return false;
+
+      const rawShiftHours = outTime - inTime;
+      const minHours = Number(shiftSettings.autoLunchMinShiftHours) || 6;
+      return rawShiftHours > minHours;
+    },
+    [
+      shiftSettings.autoLunchEnabled,
+      shiftSettings.autoLunchMinShiftHours,
+    ]
+  );
+
   // Auto-calculate row hours
-  const calculateRowHours = useCallback((record: DailyRecord) => {
-    if (!record.timeIn || !record.timeOut) return '';
+  const calculateRowHours = useCallback(
+    (record: DailyRecord) => {
+      if (!record.timeIn || !record.timeOut) return '';
 
-    const parseTime = (timeStr: string) => {
-      if (!timeStr) return 0;
-      const [h, m] = timeStr.split(':').map(Number);
-      return h + m / 60;
-    };
+      const parseTime = (timeStr: string) => {
+        if (!timeStr) return 0;
+        const [h, m] = timeStr.split(':').map(Number);
+        return h + m / 60;
+      };
 
-    const inTime = parseTime(record.timeIn);
-    const outTime = parseTime(record.timeOut);
-    
-    // Time Out earlier than or equal to Time In
-    if (outTime <= inTime) {
-      return '0.00';
-    }
+      const inTime = parseTime(record.timeIn);
+      const outTime = parseTime(record.timeOut);
 
-    let total = outTime - inTime;
-
-    if (record.lunchStart && record.lunchEnd) {
-      const lStart = parseTime(record.lunchStart);
-      const lEnd = parseTime(record.lunchEnd);
-      if (lEnd <= lStart || lStart < inTime || lEnd > outTime) {
+      // Time Out earlier than or equal to Time In
+      if (outTime <= inTime) {
         return '0.00';
       }
-      total -= (lEnd - lStart);
-    }
 
-    return total > 0 ? total.toFixed(2) : '0.00';
-  }, []);
+      let total = outTime - inTime;
+
+      if (record.lunchStart && record.lunchEnd) {
+        const lStart = parseTime(record.lunchStart);
+        const lEnd = parseTime(record.lunchEnd);
+        if (lEnd <= lStart || lStart < inTime || lEnd > outTime) {
+          return '0.00';
+        }
+        total -= lEnd - lStart;
+      } else if (shiftSettings.autoLunchEnabled && !record.lunchStart && !record.lunchEnd) {
+        const minHours = Number(shiftSettings.autoLunchMinShiftHours) || 6;
+        const deductMins = Number(shiftSettings.autoLunchDurationMins) || 30;
+        if (total > minHours && deductMins > 0) {
+          total = Math.max(0, total - deductMins / 60);
+        }
+      }
+
+      return total > 0 ? total.toFixed(2) : '0.00';
+    },
+    [
+      shiftSettings.autoLunchEnabled,
+      shiftSettings.autoLunchDurationMins,
+      shiftSettings.autoLunchMinShiftHours,
+    ]
+  );
+
+  // Populate default lunch start/end times onto any shift > threshold with no lunch recorded
+  const populateDefaultLunchCells = useCallback(
+    (durationMinsOverride?: number) => {
+      const durationMins = durationMinsOverride ?? (Number(shiftSettings.autoLunchDurationMins) || 30);
+      const minHours = Number(shiftSettings.autoLunchMinShiftHours) || 6;
+      const parseMins = (t: string) => {
+        if (!t || !t.includes(':')) return null;
+        const [h, m] = t.split(':').map(Number);
+        return isNaN(h) || isNaN(m) ? null : h * 60 + m;
+      };
+      const formatMins = (totalMins: number) => {
+        const clamped = ((totalMins % 1440) + 1440) % 1440;
+        const hh = String(Math.floor(clamped / 60)).padStart(2, '0');
+        const mm = String(clamped % 60).padStart(2, '0');
+        return `${hh}:${mm}`;
+      };
+
+      let count = 0;
+      const updated = records.map(r => {
+        if (!r.timeIn || !r.timeOut || r.lunchStart || r.lunchEnd) return r;
+        const inM = parseMins(r.timeIn);
+        const outM = parseMins(r.timeOut);
+        if (inM === null || outM === null || outM <= inM) return r;
+        const shiftHrs = (outM - inM) / 60;
+        if (shiftHrs <= minHours) return r;
+
+        const prefStart = parseMins(shiftSettings.lunchStart || '12:00') ?? 720;
+        const lStartMins =
+          prefStart > inM && prefStart + durationMins < outM
+            ? prefStart
+            : Math.round((inM + (outM - inM) / 2 - durationMins / 2) / 5) * 5;
+        const lEndMins = lStartMins + durationMins;
+        count++;
+        const nextRec = {
+          ...r,
+          lunchStart: formatMins(lStartMins),
+          lunchEnd: formatMins(lEndMins),
+        };
+        nextRec.totalHours = calculateRowHours(nextRec);
+        return nextRec;
+      });
+
+      if (count > 0) {
+        setRecords(updated);
+      }
+      return count;
+    },
+    [
+      records,
+      shiftSettings.autoLunchDurationMins,
+      shiftSettings.autoLunchMinShiftHours,
+      shiftSettings.lunchStart,
+      calculateRowHours,
+    ]
+  );
 
   // Auto-calculate weekly total hours
   useEffect(() => {
@@ -526,6 +748,8 @@ export default function App() {
   };
 
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
+  const [mobileToolMenuDayIndex, setMobileToolMenuDayIndex] = useState<number | null>(null);
+  const [copyConfirmDayIndex, setCopyConfirmDayIndex] = useState<number | null>(null);
 
   const handleRecordChange = (index: number, field: keyof DailyRecord, value: string) => {
     const updated = [...records];
@@ -767,83 +991,91 @@ export default function App() {
       if (tIn !== null && tOut !== null && (lEnd - lStart) >= (tOut - tIn)) {
         return 'Lunch duration exceeds shift duration';
       }
+      const maxBreakLimit = Number(shiftSettings.maxBreakMinutes) || 120;
+      if (shiftSettings.excessiveBreakAlertEnabled !== false && (lEnd - lStart) > maxBreakLimit) {
+        return `Break time is ${lEnd - lStart} mins (exceeds ${maxBreakLimit}-min daily limit — check data entry)`;
+      }
     }
 
     return null;
   };
 
-  // PDF Generation with standardized filename
+  const [actionNotice, setActionNotice] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+  const showNotice = (type: 'success' | 'error', text: string) => {
+    setActionNotice({ type, text });
+    window.setTimeout(() => {
+      setActionNotice(prev => (prev?.text === text ? null : prev));
+    }, 5000);
+  };
+
+  // Vector PDF Generation with standardized filename
   const getPdfFilename = () => {
     const safeName = (name || 'Employee').trim().replace(/[^a-zA-Z0-9_-]/g, '_');
     const safePeriod = (periodStart || 'Period').replace(/[^a-zA-Z0-9_-]/g, '_');
     return `Timesheet_${safeName}_${safePeriod}.pdf`;
   };
 
-  const generatePDF = async () => {
-    const contentElement = document.getElementById('timesheet-content');
-    if (!contentElement) return null;
-
-    const elementsToHide = contentElement.querySelectorAll('.print\\:hidden, .pdf\\:hidden');
-    elementsToHide.forEach(el => ((el as HTMLElement).style.display = 'none'));
-
-    contentElement.classList.add('pdf-mode');
-    if (isDarkMode) {
-      contentElement.classList.add('dark');
-      Array.from(contentElement.children).forEach(c => c.classList.add('dark'));
-    }
-
-    const originalWidth = contentElement.style.width;
-    const originalMaxWidth = contentElement.style.maxWidth;
-    const originalMargin = contentElement.style.margin;
-
-    contentElement.style.width = '800px';
-    contentElement.style.maxWidth = '800px';
-    contentElement.style.margin = '0 auto';
-
-    await new Promise(resolve => setTimeout(resolve, 100));
-
+  const generatePDF = async (): Promise<jsPDF | null> => {
     try {
-      const dataUrl = await toPng(contentElement, {
-        quality: 1.0,
-        pixelRatio: 2,
-        backgroundColor: isDarkMode ? '#0f172a' : '#ffffff',
-        width: 800,
-        style: {
-          width: '800px',
-          maxWidth: '800px',
-          margin: '0 auto',
-          transform: 'scale(1)',
-          transformOrigin: 'top left'
-        }
-      });
+      const rangeLabel = formatPeriodRange(periodStart, shiftSettings.period) || periodStart;
+      const numTotal = parseFloat(totalHours || '0') || 0;
+      const otHrs = overtimePeriodHours;
+      const regHrs = regularPeriodHours;
 
-      const pdf = new jsPDF({
-        orientation: 'portrait',
-        unit: 'mm',
-        format: 'a4'
-      });
-
-      const margin = 12;
-      const pdfWidth = pdf.internal.pageSize.getWidth();
-      const availableWidth = pdfWidth - margin * 2;
-      const imgProps = pdf.getImageProperties(dataUrl);
-      const imgHeight = (imgProps.height * availableWidth) / imgProps.width;
-
-      pdf.addImage(dataUrl, 'PNG', margin, margin, availableWidth, imgHeight);
-      return pdf;
-    } catch (err) {
-      console.error('Error generating PDF:', err);
-      return null;
-    } finally {
-      contentElement.style.width = originalWidth;
-      contentElement.style.maxWidth = originalMaxWidth;
-      contentElement.style.margin = originalMargin;
-      contentElement.classList.remove('pdf-mode');
-      if (isDarkMode) {
-        contentElement.classList.remove('dark');
-        Array.from(contentElement.children).forEach(c => c.classList.remove('dark'));
+      let sigImg = signature;
+      if (signatureMode === 'draw' && sigCanvas.current && !sigCanvas.current.isEmpty()) {
+        // Ensure dark strokes on light PDF paper even if user drew in dark mode
+        sigImg = sigCanvas.current.toDataURL('image/png');
       }
-      elementsToHide.forEach(el => ((el as HTMLElement).style.display = ''));
+
+      return generateVectorTimesheetPDF({
+        companyName: companyName || 'Royal Transportation',
+        periodType: shiftSettings.period,
+        periodRangeLabel: rangeLabel,
+        periodStart,
+        employeeName: name || 'Employee',
+        employeeEmail: user?.email || employeeEmail || '',
+        managerEmail: recipientEmail || '',
+        rows: records.map(r => ({
+          day: r.day,
+          date: r.date,
+          timeIn: r.timeIn,
+          lunchStart: r.lunchStart,
+          lunchEnd: r.lunchEnd,
+          timeOut: r.timeOut,
+          totalHours: r.totalHours || '0.00',
+          notes: r.notes || '',
+        })),
+        totalPeriodHours: numTotal,
+        regularPeriodHours: regHrs,
+        overtimePeriodHours: otHrs,
+        signatureDataUrl: sigImg,
+        typedSignature: signatureMode === 'type' ? (typedName || name) : '',
+        signatureDate: date || getTodayDate(),
+      });
+    } catch (err) {
+      console.error('Error generating vector PDF:', err);
+      return null;
+    }
+  };
+
+  const handleExportPDF = async () => {
+    setIsGeneratingPDF(true);
+    try {
+      const pdf = await generatePDF();
+      if (pdf) {
+        const filename = getPdfFilename();
+        pdf.save(filename);
+        showNotice('success', `Exported ${filename}`);
+      } else {
+        showNotice('error', 'Could not generate PDF file.');
+      }
+    } catch (error) {
+      console.error('Export PDF error:', error);
+      showNotice('error', 'Error exporting PDF file.');
+    } finally {
+      setIsGeneratingPDF(false);
     }
   };
 
@@ -852,16 +1084,14 @@ export default function App() {
     try {
       const pdf = await generatePDF();
       if (pdf) {
-        pdf.autoPrint();
-        const blobUrl = URL.createObjectURL(pdf.output('blob'));
-        const printWindow = window.open(blobUrl, '_blank');
-        if (!printWindow) {
-          pdf.save(getPdfFilename());
-        }
+        triggerPrintAndDownloadPDF(pdf, getPdfFilename());
+        showNotice('success', `Prepared print view & downloaded ${getPdfFilename()}`);
+      } else {
+        window.print();
       }
     } catch (error) {
       console.error('Print error:', error);
-      alert('Error generating print file.');
+      showNotice('error', 'Error preparing print view.');
     } finally {
       setIsGeneratingPDF(false);
     }
@@ -869,20 +1099,20 @@ export default function App() {
 
   const handleSendEmailClick = () => {
     if (!name?.trim()) {
-      alert("Please enter your name to send the timesheet.");
+      showNotice('error', 'Please enter your Employee Name before sending.');
       return;
     }
     const actualEmployeeEmail = user?.email || employeeEmail?.trim();
     if (!actualEmployeeEmail) {
-      alert("Please enter your email address to send the timesheet.");
+      showNotice('error', 'Please enter your Employee Email address before sending.');
       return;
     }
-    if (!signature) {
-      alert("Please sign or type your signature before sending.");
+    if (!signature && !(signatureMode === 'type' && typedName?.trim())) {
+      showNotice('error', 'Please sign or type your signature before sending.');
       return;
     }
     if (!recipientEmail?.trim()) {
-      alert("Please enter manager's email address.");
+      showNotice('error', "Please enter manager's email address.");
       return;
     }
     setShowEmailConfirm(true);
@@ -1046,6 +1276,287 @@ export default function App() {
     return records.filter(r => r.timeIn || r.timeOut || (r.totalHours && parseFloat(r.totalHours) > 0)).length;
   }, [records]);
 
+  // Calculate overtime (Daily >8h/day when enabled, plus Weekly >40h/wk by default or Per-period >40h/period) & 40-hour weekly target progress
+  const numericTotalHours = useMemo(() => parseFloat(totalHours || '0') || 0, [totalHours]);
+  const isWeeklyOvertimeMode = shiftSettings.calculateOvertimeWeekly !== false;
+  const isDailyOvertimeMode = Boolean(shiftSettings.calculateDailyOvertime);
+
+  const { regularPeriodHours, overtimePeriodHours } = useMemo(() => {
+    const bucketSize = isWeeklyOvertimeMode ? 7 : Math.max(1, records.length);
+    let regSum = 0;
+    let otSum = 0;
+
+    for (let i = 0; i < records.length; i += bucketSize) {
+      const bucketSlice = records.slice(i, i + bucketSize);
+      let bucketRegCandidates = 0;
+      let bucketDailyOt = 0;
+
+      for (const r of bucketSlice) {
+        const dayHrs = parseFloat(r.totalHours || '0') || 0;
+        if (isDailyOvertimeMode) {
+          const dayReg = Math.min(8, dayHrs);
+          const dayOt = Math.max(0, dayHrs - 8);
+          bucketRegCandidates += dayReg;
+          bucketDailyOt += dayOt;
+        } else {
+          bucketRegCandidates += dayHrs;
+        }
+      }
+
+      const bucketReg = Math.min(40, bucketRegCandidates);
+      const bucketThresholdOt = Math.max(0, bucketRegCandidates - 40);
+
+      regSum += bucketReg;
+      otSum += bucketDailyOt + bucketThresholdOt;
+    }
+
+    return {
+      regularPeriodHours: regSum,
+      overtimePeriodHours: otSum,
+    };
+  }, [isDailyOvertimeMode, isWeeklyOvertimeMode, records]);
+
+  const isOvertimePeriod = overtimePeriodHours > 0;
+
+  // 40-hour weekly target metrics
+  const weeklyTargetHours = 40;
+  const targetProgressPercent = useMemo(
+    () => Math.min(100, Math.max(0, (numericTotalHours / weeklyTargetHours) * 100)),
+    [numericTotalHours]
+  );
+  const remainingToTargetHours = useMemo(
+    () => Math.max(0, weeklyTargetHours - numericTotalHours),
+    [numericTotalHours]
+  );
+  const weekBreakdown = useMemo(() => {
+    const sumSlice = (slice: DailyRecord[]) =>
+      slice.reduce((acc, r) => acc + (parseFloat(r.totalHours || '0') || 0), 0);
+    const w1 = sumSlice(records.slice(0, 7));
+    const w2 = records.length > 7 ? sumSlice(records.slice(7, 14)) : null;
+    return {
+      week1Hours: w1,
+      week1Percent: Math.min(100, (w1 / 40) * 100),
+      week2Hours: w2,
+      week2Percent: w2 !== null ? Math.min(100, (w2 / 40) * 100) : 0,
+    };
+  }, [records]);
+
+  // Alert system for single-day break time exceeding 120 minutes (or configured maxBreakMinutes)
+  const notifiedExcessiveBreakKeysRef = useRef<Set<string>>(new Set());
+  const [dismissedBreakAlertKeys, setDismissedBreakAlertKeys] = useState<string[]>([]);
+
+  const excessiveBreakAlerts = useMemo(() => {
+    if (shiftSettings.excessiveBreakAlertEnabled === false) return [];
+    const maxBreakMins = Number(shiftSettings.maxBreakMinutes) || 120;
+    const parseTimeToMins = (t: string): number | null => {
+      if (!t || !t.includes(':')) return null;
+      const [h, m] = t.split(':').map(Number);
+      if (isNaN(h) || isNaN(m)) return null;
+      return h * 60 + m;
+    };
+
+    const list: {
+      recordIndex: number;
+      dayLabel: string;
+      dateStr: string;
+      lunchStart: string;
+      lunchEnd: string;
+      breakMinutes: number;
+      alertKey: string;
+    }[] = [];
+
+    records.forEach((rec, idx) => {
+      const lStart = parseTimeToMins(rec.lunchStart);
+      const lEnd = parseTimeToMins(rec.lunchEnd);
+      if (lStart !== null && lEnd !== null && lEnd > lStart) {
+        const breakMins = lEnd - lStart;
+        if (breakMins > maxBreakMins) {
+          const alertKey = `${rec.date || idx}-${rec.lunchStart}-${rec.lunchEnd}-${maxBreakMins}`;
+          if (!dismissedBreakAlertKeys.includes(alertKey)) {
+            list.push({
+              recordIndex: idx,
+              dayLabel: rec.day,
+              dateStr: rec.date || `Day ${idx + 1}`,
+              lunchStart: rec.lunchStart,
+              lunchEnd: rec.lunchEnd,
+              breakMinutes: breakMins,
+              alertKey,
+            });
+          }
+        }
+      }
+    });
+
+    return list;
+  }, [records, shiftSettings.excessiveBreakAlertEnabled, shiftSettings.maxBreakMinutes, dismissedBreakAlertKeys]);
+
+  useEffect(() => {
+    if (!shiftSettings.excessiveBreakAlertEnabled || excessiveBreakAlerts.length === 0) return;
+    const first = excessiveBreakAlerts[0];
+    if (!notifiedExcessiveBreakKeysRef.current.has(first.alertKey)) {
+      notifiedExcessiveBreakKeysRef.current.add(first.alertKey);
+      const maxBreakMins = Number(shiftSettings.maxBreakMinutes) || 120;
+      const title = `Break Time Alert — Exceeds ${maxBreakMins} Minutes`;
+      const body = `${first.dayLabel} (${first.dateStr}) has a recorded break of ${first.breakMinutes} mins (${(
+        first.breakMinutes / 60
+      ).toFixed(2)} hrs: ${first.lunchStart} – ${first.lunchEnd}), exceeding the ${maxBreakMins}-minute daily break limit.`;
+
+      if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
+        try {
+          new Notification(title, {
+            body,
+            tag: `excessive-break-${first.alertKey}`,
+          });
+        } catch {}
+      }
+    }
+  }, [excessiveBreakAlerts, shiftSettings.excessiveBreakAlertEnabled, shiftSettings.maxBreakMinutes]);
+
+  // Browser notification system for working 5 consecutive hours without a lunch break based on shiftSettings
+  const notifiedLunchKeysRef = useRef<Set<string>>(new Set());
+  const [lunchBreakAlert, setLunchBreakAlert] = useState<{
+    recordIndex: number;
+    dayLabel: string;
+    dateStr: string;
+    consecutiveHours: number;
+  } | null>(null);
+
+  const checkFiveConsecutiveHoursWithoutLunch = useCallback(() => {
+    if (!shiftSettings.enabled) {
+      setLunchBreakAlert(null);
+      return;
+    }
+
+    const parseTimeToMins = (t: string): number | null => {
+      if (!t || !t.includes(':')) return null;
+      const [h, m] = t.split(':').map(Number);
+      if (isNaN(h) || isNaN(m)) return null;
+      return h * 60 + m;
+    };
+
+    const now = new Date();
+    const nowMins = now.getHours() * 60 + now.getMinutes();
+    const currentTodayStr = getTodayDate();
+    const schedStartMins = parseTimeToMins(shiftSettings.startTime);
+
+    let detectedAlert: {
+      recordIndex: number;
+      dayLabel: string;
+      dateStr: string;
+      consecutiveHours: number;
+      alertKey: string;
+    } | null = null;
+
+    for (let idx = 0; idx < records.length; idx++) {
+      const rec = records[idx];
+      const hasLunchEntered = Boolean(rec.lunchStart && rec.lunchStart.trim() !== '') && Boolean(rec.lunchEnd && rec.lunchEnd.trim() !== '');
+      if (hasLunchEntered) continue;
+
+      const inMins = parseTimeToMins(rec.timeIn);
+      const outMins = parseTimeToMins(rec.timeOut);
+
+      // 1) Completed or entered shift with >= 5 consecutive hours (300 mins) and no lunch break entered
+      if (inMins !== null && outMins !== null && outMins > inMins) {
+        const workedMins = outMins - inMins;
+        if (workedMins >= 300) {
+          const hrs = workedMins / 60;
+          detectedAlert = {
+            recordIndex: idx,
+            dayLabel: rec.day,
+            dateStr: rec.date || `Day ${idx + 1}`,
+            consecutiveHours: hrs,
+            alertKey: `${rec.date || idx}-${rec.timeIn}-${rec.timeOut}-nolunch`,
+          };
+          break;
+        }
+      }
+
+      // 2) Active shift on today's row (clocked in or shiftSettings startTime elapsed >= 5 hours without lunchStart)
+      if (rec.date === currentTodayStr && !rec.lunchStart) {
+        const effectiveStartMins = inMins !== null ? inMins : null;
+        if (effectiveStartMins !== null && outMins === null) {
+          const elapsedMins = nowMins - effectiveStartMins;
+          if (elapsedMins >= 300) {
+            const hrs = elapsedMins / 60;
+            detectedAlert = {
+              recordIndex: idx,
+              dayLabel: rec.day,
+              dateStr: rec.date,
+              consecutiveHours: hrs,
+              alertKey: `${rec.date}-${rec.timeIn}-active-5h`,
+            };
+            break;
+          }
+        } else if (
+          inMins !== null &&
+          schedStartMins !== null &&
+          nowMins - schedStartMins >= 300 &&
+          outMins === null
+        ) {
+          const hrs = (nowMins - schedStartMins) / 60;
+          detectedAlert = {
+            recordIndex: idx,
+            dayLabel: rec.day,
+            dateStr: rec.date,
+            consecutiveHours: hrs,
+            alertKey: `${rec.date}-sched-${shiftSettings.startTime}-5h`,
+          };
+          break;
+        }
+      }
+    }
+
+    if (detectedAlert) {
+      setLunchBreakAlert({
+        recordIndex: detectedAlert.recordIndex,
+        dayLabel: detectedAlert.dayLabel,
+        dateStr: detectedAlert.dateStr,
+        consecutiveHours: detectedAlert.consecutiveHours,
+      });
+
+      if (!notifiedLunchKeysRef.current.has(detectedAlert.alertKey)) {
+        notifiedLunchKeysRef.current.add(detectedAlert.alertKey);
+        const title = 'Lunch Break Reminder — 5+ Consecutive Hours';
+        const body = `You have worked ${detectedAlert.consecutiveHours.toFixed(2)} consecutive hours on ${detectedAlert.dayLabel} (${detectedAlert.dateStr}) without entering a lunch break. Scheduled lunch: ${shiftSettings.lunchStart || '12:00'} – ${shiftSettings.lunchEnd || '13:00'}.`;
+
+        if (typeof window !== 'undefined' && 'Notification' in window) {
+          if (Notification.permission === 'granted') {
+            try {
+              new Notification(title, {
+                body,
+                tag: `lunch-alert-${detectedAlert.alertKey}`,
+              });
+            } catch (e) {
+              console.warn('Browser notification dispatch failed:', e);
+            }
+          } else if (Notification.permission === 'default') {
+            Notification.requestPermission()
+              .then(perm => {
+                if (perm === 'granted') {
+                  try {
+                    new Notification(title, {
+                      body,
+                      tag: `lunch-alert-${detectedAlert!.alertKey}`,
+                    });
+                  } catch {}
+                }
+              })
+              .catch(() => {});
+          }
+        }
+      }
+    } else {
+      setLunchBreakAlert(null);
+    }
+  }, [records, shiftSettings]);
+
+  useEffect(() => {
+    checkFiveConsecutiveHoursWithoutLunch();
+    if (!shiftSettings.enabled) return;
+    const intervalId = window.setInterval(checkFiveConsecutiveHoursWithoutLunch, 30000);
+    return () => window.clearInterval(intervalId);
+  }, [checkFiveConsecutiveHoursWithoutLunch, shiftSettings.enabled]);
+
   const periodRangeLabel = useMemo(() => {
     return formatPeriodRange(periodStart, shiftSettings.period);
   }, [periodStart, shiftSettings.period]);
@@ -1061,8 +1572,154 @@ export default function App() {
     .sort((a, b) => b[0].localeCompare(a[0]));
 
   return (
-    <main className="min-h-screen bg-gray-50 dark:bg-[#0b0f19] text-gray-900 dark:text-gray-100 py-3 sm:py-6 px-2.5 sm:px-6 lg:px-8 pb-28 md:pb-12 print:bg-white pdf:bg-white print:p-0 pdf:p-0">
-      <div id="timesheet-content" className="max-w-5xl print:max-w-full pdf:max-w-full mx-auto space-y-4 sm:space-y-6">
+    <main className="min-h-screen bg-gray-50 dark:bg-[#0b0f19] text-gray-900 dark:text-gray-100 py-3 sm:py-6 px-2.5 sm:px-5 lg:px-8 pb-28 md:pb-12 print:bg-white pdf:bg-white print:p-0 pdf:p-0">
+      <div id="timesheet-content" className="max-w-7xl print:max-w-full pdf:max-w-full mx-auto space-y-4 sm:space-y-6">
+
+        {/* 5-Consecutive-Hours No-Lunch Browser Notification Alert Banner */}
+        {shiftSettings.enabled && lunchBreakAlert && (
+          <div
+            role="alert"
+            className="bg-amber-50 dark:bg-amber-950/60 border border-amber-300 dark:border-amber-700/80 rounded-2xl p-3.5 sm:p-4 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3 print:hidden pdf:hidden"
+          >
+            <div className="flex items-start gap-2.5">
+              <Utensils className="w-5 h-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+              <div className="text-xs sm:text-sm text-amber-900 dark:text-amber-100">
+                <span className="font-extrabold">Lunch Break Alert (5+ Consecutive Hours): </span>
+                <span>
+                  You have worked <strong>{lunchBreakAlert.consecutiveHours.toFixed(2)} hrs</strong> on{' '}
+                  <strong>{lunchBreakAlert.dayLabel} ({lunchBreakAlert.dateStr})</strong> without entering a lunch break time
+                  (Shift setting: {shiftSettings.lunchStart} – {shiftSettings.lunchEnd}).
+                </span>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
+              <button
+                type="button"
+                onClick={() => {
+                  const idx = lunchBreakAlert.recordIndex;
+                  const updated = [...records];
+                  if (updated[idx]) {
+                    updated[idx] = {
+                      ...updated[idx],
+                      lunchStart: shiftSettings.lunchStart || '12:00',
+                      lunchEnd: shiftSettings.lunchEnd || '13:00',
+                    };
+                    setRecords(updated);
+                  }
+                }}
+                className="px-3 py-1.5 text-xs font-bold bg-amber-600 hover:bg-amber-700 text-white rounded-xl transition-colors"
+              >
+                Enter Lunch ({shiftSettings.lunchStart}–{shiftSettings.lunchEnd})
+              </button>
+              <button
+                type="button"
+                onClick={() => setLunchBreakAlert(null)}
+                className="p-1.5 text-amber-700 dark:text-amber-300 hover:bg-amber-100 dark:hover:bg-amber-900/40 rounded-lg"
+                aria-label="Dismiss lunch alert"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Excessive Daily Break (> 120 Minutes) Quality-of-Life Data Entry Alert Banner */}
+        {shiftSettings.excessiveBreakAlertEnabled !== false && excessiveBreakAlerts.length > 0 && (
+          <div
+            role="alert"
+            className="bg-rose-50 dark:bg-rose-950/60 border border-rose-300 dark:border-rose-700/80 rounded-2xl p-3.5 sm:p-4 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3 print:hidden pdf:hidden"
+          >
+            <div className="flex items-start gap-2.5">
+              <AlertTriangle className="w-5 h-5 text-rose-600 dark:text-rose-400 shrink-0 mt-0.5" />
+              <div className="text-xs sm:text-sm text-rose-900 dark:text-rose-100">
+                <span className="font-extrabold">
+                  Break Duration Alert (&gt;{shiftSettings.maxBreakMinutes || 120} Mins):{' '}
+                </span>
+                <span>
+                  <strong>
+                    {excessiveBreakAlerts[0].dayLabel} ({excessiveBreakAlerts[0].dateStr})
+                  </strong>{' '}
+                  has a recorded break of{' '}
+                  <strong className="underline decoration-rose-400">
+                    {excessiveBreakAlerts[0].breakMinutes} mins (
+                    {(excessiveBreakAlerts[0].breakMinutes / 60).toFixed(2)} hrs)
+                  </strong>{' '}
+                  from <strong>{excessiveBreakAlerts[0].lunchStart}</strong> to{' '}
+                  <strong>{excessiveBreakAlerts[0].lunchEnd}</strong>. Please verify this isn&apos;t a data entry or AM/PM error.
+                  {excessiveBreakAlerts.length > 1 && (
+                    <span className="ml-1 font-bold">
+                      (+{excessiveBreakAlerts.length - 1} more day{excessiveBreakAlerts.length > 2 ? 's' : ''})
+                    </span>
+                  )}
+                </span>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
+              <button
+                type="button"
+                onClick={() => {
+                  const idx = excessiveBreakAlerts[0].recordIndex;
+                  const updated = [...records];
+                  if (updated[idx]) {
+                    updated[idx] = {
+                      ...updated[idx],
+                      lunchStart: shiftSettings.lunchStart || '12:00',
+                      lunchEnd: shiftSettings.lunchEnd || '13:00',
+                    };
+                    updated[idx].totalHours = calculateRowHours(updated[idx]);
+                    setRecords(updated);
+                    showNotice(
+                      'success',
+                      `Reset ${updated[idx].day} lunch break to ${shiftSettings.lunchStart || '12:00'}–${shiftSettings.lunchEnd || '13:00'}.`
+                    );
+                  }
+                }}
+                className="px-3 py-1.5 text-xs font-bold bg-rose-600 hover:bg-rose-700 text-white rounded-xl transition-colors whitespace-nowrap"
+              >
+                Reset to {shiftSettings.lunchStart || '12:00'}–{shiftSettings.lunchEnd || '13:00'}
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  setDismissedBreakAlertKeys(prev => [...prev, excessiveBreakAlerts[0].alertKey])
+                }
+                className="p-1.5 text-rose-700 dark:text-rose-300 hover:bg-rose-100 dark:hover:bg-rose-900/40 rounded-lg"
+                aria-label="Dismiss excessive break alert"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* In-App PDF / Validation Notice Banner */}
+        {actionNotice && (
+          <div
+            role="status"
+            className={`rounded-2xl px-4 py-3 text-xs sm:text-sm font-semibold flex items-center justify-between gap-3 shadow-sm border print:hidden pdf:hidden ${
+              actionNotice.type === 'error'
+                ? 'bg-rose-50 dark:bg-rose-950/60 text-rose-800 dark:text-rose-200 border-rose-300 dark:border-rose-800'
+                : 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-200 border-emerald-300 dark:border-emerald-800'
+            }`}
+          >
+            <div className="flex items-center gap-2">
+              {actionNotice.type === 'error' ? (
+                <AlertTriangle className="w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0" />
+              ) : (
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+              )}
+              <span>{actionNotice.text}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setActionNotice(null)}
+              className="p-1 rounded-lg hover:bg-black/5 dark:hover:bg-white/10"
+              aria-label="Dismiss notice"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        )}
 
         {/* =========================================================================
             HEADER - STRICT RULES:
@@ -1070,16 +1727,16 @@ export default function App() {
             - NO dark mode / theme toggle in the header. Theme control lives ONLY inside Settings modal.
             - Demote "Login / Sign Up" so it doesn't compete with Send/Print. Add helper: "Login adds sync + history. Sheet works without it."
             ========================================================================= */}
-        <header className="relative z-30 bg-white dark:bg-slate-900 rounded-2xl p-3.5 sm:p-5 shadow-sm border border-gray-200/80 dark:border-slate-800 print:hidden pdf:hidden flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <header className="relative z-30 bg-white dark:bg-slate-900 rounded-2xl p-3.5 sm:p-4 lg:p-5 shadow-sm border border-gray-200/80 dark:border-slate-800 print:hidden pdf:hidden flex flex-col md:flex-row md:flex-wrap xl:flex-nowrap md:items-center justify-between gap-3 lg:gap-4">
           
           {/* Left Brand & Company */}
-          <div className="flex items-center justify-between gap-3 w-full md:w-auto">
-            <div className="flex items-center gap-3">
-              <div className="w-11 h-11 bg-indigo-600 rounded-xl flex items-center justify-center text-white shadow-sm flex-shrink-0">
-                <Clock className="w-6 h-6" />
+          <div className="flex items-center justify-between gap-3 w-full md:w-auto shrink-0">
+            <div className="flex items-center gap-2.5 sm:gap-3">
+              <div className="w-10 h-10 sm:w-11 sm:h-11 bg-indigo-600 rounded-xl flex items-center justify-center text-white shadow-sm flex-shrink-0">
+                <Clock className="w-5 h-5 sm:w-6 sm:h-6" />
               </div>
               <div>
-                <h1 className="text-lg sm:text-xl font-bold tracking-tight text-gray-900 dark:text-white leading-tight">
+                <h1 className="text-base sm:text-lg lg:text-xl font-bold tracking-tight text-gray-900 dark:text-white leading-tight whitespace-nowrap">
                   Time Sheet Manager
                 </h1>
                 
@@ -1155,41 +1812,34 @@ export default function App() {
           </div>
 
           {/* Desktop Controls + Demoted Login + Alone Settings Gear on Far Right */}
-          <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-end gap-3 w-full md:w-auto">
+          <div className="flex flex-wrap items-center justify-between sm:justify-end gap-2.5 lg:gap-3 w-full md:w-auto md:flex-1">
             
             {/* Last saved indicator - Darker & Prominent */}
             {lastSaved && (
-              <div className="text-xs font-medium text-gray-700 dark:text-slate-300 flex items-center gap-1.5 self-start sm:self-center">
-                <Save className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
-                <span>Last saved {lastSaved.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+              <div className="text-xs font-medium text-gray-700 dark:text-slate-300 flex items-center gap-1.5 shrink-0">
+                <Save className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                <span className="whitespace-nowrap">
+                  Last saved {lastSaved.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                </span>
               </div>
             )}
 
-            {/* Demoted Login / Sign Up */}
-            <div className="flex flex-col items-start sm:items-end">
-              {!user ? (
-                <div>
-                  <button
-                    onClick={() => setShowAuthModal(true)}
-                    className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-600 dark:text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 px-2.5 py-1 rounded-md hover:bg-gray-100 dark:hover:bg-slate-800 transition-colors"
-                  >
-                    <User className="w-3.5 h-3.5" />
-                    <span>Login / Sign Up</span>
-                  </button>
-                  <p className="hidden xl:block text-[11px] text-gray-400 dark:text-slate-500 text-right">
-                    Login adds sync + history. Sheet works without it.
-                  </p>
-                </div>
-              ) : (
-                <div className="flex items-center gap-1.5 text-xs text-gray-700 dark:text-slate-300 bg-gray-100 dark:bg-slate-800 px-2.5 py-1 rounded-md">
-                  <User className="w-3.5 h-3.5 text-indigo-600" />
-                  <span className="max-w-[120px] truncate">{user.email}</span>
-                </div>
-              )}
+            {/* Demoted Business Login (Part A2) */}
+            <div className="flex flex-col items-start sm:items-end shrink-0">
+              <button
+                onClick={onOpenBusinessLogin}
+                className="inline-flex items-center gap-1.5 text-xs font-semibold text-indigo-600 dark:text-indigo-400 hover:text-indigo-700 dark:hover:text-indigo-300 px-2.5 py-1 rounded-lg bg-indigo-50/70 dark:bg-indigo-950/40 hover:bg-indigo-100/80 dark:hover:bg-slate-800 transition-colors whitespace-nowrap"
+              >
+                <User className="w-3.5 h-3.5 shrink-0" />
+                <span>Business Login</span>
+              </button>
+              <p className="text-[10px] text-gray-400 dark:text-slate-500 text-left sm:text-right leading-tight mt-0.5 whitespace-nowrap">
+                Login adds sync + history. Sheet works without it.
+              </p>
             </div>
 
             {/* Desktop Actions: Manager Email, Print, Send */}
-            <div className="hidden md:flex items-center gap-2">
+            <div className="hidden md:flex items-center gap-2 shrink-0">
               <div className="relative" ref={emailContainerRef}>
                 <input
                   type="email"
@@ -1197,7 +1847,7 @@ export default function App() {
                   value={recipientEmail}
                   onChange={e => setRecipientEmail(e.target.value)}
                   onFocus={() => setShowEmailHistory(true)}
-                  className="w-56 px-3 py-2 text-sm border border-gray-300 dark:border-slate-700 rounded-xl bg-gray-50 dark:bg-slate-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-indigo-500 focus:bg-white"
+                  className="w-44 lg:w-56 pl-3 pr-7 py-2 text-xs lg:text-sm border border-gray-300 dark:border-slate-700 rounded-xl bg-gray-50 dark:bg-slate-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-indigo-500 focus:bg-white"
                 />
                 <button
                   type="button"
@@ -1239,9 +1889,20 @@ export default function App() {
               </div>
 
               <button
+                onClick={handleExportPDF}
+                disabled={isGeneratingPDF}
+                title="Download formatted A4 PDF timesheet"
+                className="min-h-[40px] lg:min-h-[44px] px-3 lg:px-3.5 py-2 text-xs lg:text-sm font-semibold text-gray-700 dark:text-slate-200 bg-white dark:bg-slate-800 border border-gray-300 dark:border-slate-700 rounded-xl hover:bg-gray-50 dark:hover:bg-slate-700 transition-all flex items-center gap-1.5 active:scale-95 disabled:opacity-60 whitespace-nowrap shrink-0"
+              >
+                {isGeneratingPDF ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+                <span>PDF</span>
+              </button>
+
+              <button
                 onClick={handlePrint}
                 disabled={isGeneratingPDF}
-                className="min-h-[44px] px-3.5 py-2 text-sm font-semibold text-gray-700 dark:text-slate-200 bg-white dark:bg-slate-800 border border-gray-300 dark:border-slate-700 rounded-xl hover:bg-gray-50 dark:hover:bg-slate-700 transition-all flex items-center gap-1.5 active:scale-95 disabled:opacity-60"
+                title="Print timesheet and save PDF copy"
+                className="min-h-[40px] lg:min-h-[44px] px-3 lg:px-3.5 py-2 text-xs lg:text-sm font-semibold text-gray-700 dark:text-slate-200 bg-white dark:bg-slate-800 border border-gray-300 dark:border-slate-700 rounded-xl hover:bg-gray-50 dark:hover:bg-slate-700 transition-all flex items-center gap-1.5 active:scale-95 disabled:opacity-60 whitespace-nowrap shrink-0"
               >
                 {isGeneratingPDF ? <Loader2 className="w-4 h-4 animate-spin" /> : <Printer className="w-4 h-4" />}
                 <span>Print</span>
@@ -1250,7 +1911,7 @@ export default function App() {
               <button
                 onClick={handleSendEmailClick}
                 disabled={isSending}
-                className="min-h-[44px] px-4 py-2 text-sm font-bold text-white bg-indigo-600 rounded-xl hover:bg-indigo-700 transition-all flex items-center gap-2 shadow-sm active:scale-95 disabled:opacity-60"
+                className="min-h-[40px] lg:min-h-[44px] px-3.5 lg:px-4 py-2 text-xs lg:text-sm font-bold text-white bg-indigo-600 rounded-xl hover:bg-indigo-700 transition-all flex items-center gap-1.5 shadow-sm active:scale-95 disabled:opacity-60 whitespace-nowrap shrink-0"
               >
                 {isSending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Mail className="w-4 h-4" />}
                 <span>Send</span>
@@ -1258,10 +1919,10 @@ export default function App() {
             </div>
 
             {/* Desktop Settings Gear - ALL THE WAY to the far right edge, alone! */}
-            <div className="hidden md:block pl-2 border-l border-gray-200 dark:border-slate-800">
+            <div className="hidden md:block pl-2 border-l border-gray-200 dark:border-slate-800 shrink-0">
               <button
                 onClick={() => setIsSettingsOpen(true)}
-                className="w-11 h-11 flex items-center justify-center text-gray-600 dark:text-slate-300 bg-gray-100 dark:bg-slate-800 hover:bg-gray-200 dark:hover:bg-slate-700 rounded-xl transition-all active:scale-95 focus:ring-2 focus:ring-indigo-500"
+                className="w-10 h-10 lg:w-11 lg:h-11 flex items-center justify-center text-gray-600 dark:text-slate-300 bg-gray-100 dark:bg-slate-800 hover:bg-gray-200 dark:hover:bg-slate-700 rounded-xl transition-all active:scale-95 focus:ring-2 focus:ring-indigo-500"
                 aria-label="Settings"
                 title="Settings"
               >
@@ -1275,7 +1936,7 @@ export default function App() {
             MAIN TIMESHEET FORM CARD
             - Solid white card, rounded-2xl, soft shadow.
             ========================================================================= */}
-        <div className="bg-white dark:bg-slate-900 shadow-sm rounded-2xl p-4 sm:p-8 md:p-10 border border-gray-200/80 dark:border-slate-800 print:shadow-none pdf:shadow-none print:border-none pdf:border-none print:p-0 pdf:p-0">
+        <div className="bg-white dark:bg-slate-900 shadow-sm rounded-2xl p-4 sm:p-6 lg:p-8 border border-gray-200/80 dark:border-slate-800 print:shadow-none pdf:shadow-none print:border-none pdf:border-none print:p-0 pdf:p-0">
           
           {/* Company Title (Print & Desktop) */}
           <div className="text-center mb-6 sm:mb-8">
@@ -1395,6 +2056,157 @@ export default function App() {
           </div>
 
           {/* =========================================================================
+              VISUAL 40-HOUR WEEKLY TARGET PROGRESS BAR (MAIN TIMESHEET VIEW)
+              ========================================================================= */}
+          <div className="mb-6 sm:mb-8 p-4 sm:p-5 rounded-2xl bg-gray-50/90 dark:bg-slate-800/70 border border-gray-200/90 dark:border-slate-700/80 print:hidden pdf:hidden">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-2.5">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-xs sm:text-sm font-extrabold uppercase tracking-wider text-gray-800 dark:text-slate-100 flex items-center gap-1.5">
+                  <Clock className="w-4 h-4 text-indigo-600 dark:text-indigo-400 shrink-0" />
+                  <span>40-Hour Weekly Target Progress</span>
+                </span>
+                {isOvertimePeriod ? (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[11px] font-extrabold bg-rose-100 dark:bg-rose-950/80 text-rose-700 dark:text-rose-300 border border-rose-300 dark:border-rose-800">
+                    <AlertTriangle className="w-3 h-3 text-rose-600 dark:text-rose-400" />
+                    <span>+{overtimePeriodHours.toFixed(2)} hrs over 40h target</span>
+                  </span>
+                ) : numericTotalHours >= 40 ? (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[11px] font-extrabold bg-emerald-100 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800">
+                    <CheckCircle2 className="w-3 h-3 text-emerald-600 dark:text-emerald-400" />
+                    <span>40h Target Reached!</span>
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[11px] font-bold bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200/80 dark:border-indigo-800/70">
+                    <span>{remainingToTargetHours.toFixed(2)} hrs remaining to 40h</span>
+                  </span>
+                )}
+              </div>
+
+              <div className="flex items-baseline gap-1.5 self-start sm:self-auto">
+                <span
+                  className={`text-lg sm:text-xl font-black font-mono tabular-nums ${
+                    isOvertimePeriod
+                      ? 'text-rose-600 dark:text-rose-400'
+                      : numericTotalHours >= 40
+                        ? 'text-emerald-600 dark:text-emerald-400'
+                        : 'text-indigo-600 dark:text-indigo-400'
+                  }`}
+                >
+                  {numericTotalHours.toFixed(2)}
+                </span>
+                <span className="text-xs sm:text-sm font-bold text-gray-500 dark:text-slate-400 font-mono">
+                  / 40.00 hrs ({Math.round(targetProgressPercent)}%)
+                </span>
+              </div>
+            </div>
+
+            {/* Progress Track with 10h / 20h / 30h / 40h Milestone Ticks */}
+            <div
+              className="relative w-full h-3.5 sm:h-4 bg-gray-200/90 dark:bg-slate-700 rounded-full overflow-hidden shadow-inner"
+              role="progressbar"
+              aria-valuenow={Math.min(40, numericTotalHours)}
+              aria-valuemin={0}
+              aria-valuemax={40}
+              aria-label="Progress toward 40-hour weekly target"
+            >
+              {/* Milestone dividers at 25% (10h), 50% (20h), 75% (30h) */}
+              <div className="absolute inset-0 grid grid-cols-4 pointer-events-none z-10">
+                <div className="border-r border-white/50 dark:border-slate-900/40" />
+                <div className="border-r border-white/50 dark:border-slate-900/40" />
+                <div className="border-r border-white/50 dark:border-slate-900/40" />
+                <div />
+              </div>
+
+              <div
+                className={`h-full rounded-full transition-all duration-500 ease-out ${
+                  isOvertimePeriod
+                    ? 'bg-gradient-to-r from-indigo-600 via-amber-500 to-rose-600'
+                    : numericTotalHours >= 40
+                      ? 'bg-emerald-600'
+                      : numericTotalHours >= 32
+                        ? 'bg-gradient-to-r from-indigo-600 to-emerald-500'
+                        : 'bg-indigo-600'
+                }`}
+                style={{ width: `${targetProgressPercent}%` }}
+              />
+            </div>
+
+            {/* Scale Labels under Progress Bar */}
+            <div className="flex items-center justify-between text-[10px] font-bold font-mono text-gray-400 dark:text-slate-500 mt-1 px-0.5">
+              <span>0h</span>
+              <span>10h</span>
+              <span>20h</span>
+              <span>30h</span>
+              <span className={isOvertimePeriod ? 'text-rose-600 dark:text-rose-400 font-extrabold' : 'text-gray-600 dark:text-slate-300'}>
+                40h Target
+              </span>
+            </div>
+
+            {/* If Bi-weekly (14 days), show Week 1 and Week 2 individual 40-hr progress bars */}
+            {weekBreakdown.week2Hours !== null && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 mt-3 pt-3 border-t border-gray-200/80 dark:border-slate-700/70">
+                <div className="bg-white dark:bg-slate-900/80 px-3 py-2 rounded-xl border border-gray-200/80 dark:border-slate-700/70">
+                  <div className="flex items-center justify-between text-xs mb-1">
+                    <span className="font-bold text-gray-600 dark:text-slate-300">Week 1 (Days 1–7)</span>
+                    <span
+                      className={`font-mono font-black ${
+                        weekBreakdown.week1Hours > 40
+                          ? 'text-rose-600 dark:text-rose-400'
+                          : weekBreakdown.week1Hours === 40
+                            ? 'text-emerald-600 dark:text-emerald-400'
+                            : 'text-gray-900 dark:text-white'
+                      }`}
+                    >
+                      {weekBreakdown.week1Hours.toFixed(2)} / 40.00 hrs
+                    </span>
+                  </div>
+                  <div className="w-full h-2 bg-gray-100 dark:bg-slate-800 rounded-full overflow-hidden">
+                    <div
+                      className={`h-full rounded-full transition-all duration-300 ${
+                        weekBreakdown.week1Hours > 40
+                          ? 'bg-rose-600'
+                          : weekBreakdown.week1Hours >= 40
+                            ? 'bg-emerald-600'
+                            : 'bg-indigo-600'
+                      }`}
+                      style={{ width: `${weekBreakdown.week1Percent}%` }}
+                    />
+                  </div>
+                </div>
+
+                <div className="bg-white dark:bg-slate-900/80 px-3 py-2 rounded-xl border border-gray-200/80 dark:border-slate-700/70">
+                  <div className="flex items-center justify-between text-xs mb-1">
+                    <span className="font-bold text-gray-600 dark:text-slate-300">Week 2 (Days 8–14)</span>
+                    <span
+                      className={`font-mono font-black ${
+                        weekBreakdown.week2Hours > 40
+                          ? 'text-rose-600 dark:text-rose-400'
+                          : weekBreakdown.week2Hours === 40
+                            ? 'text-emerald-600 dark:text-emerald-400'
+                            : 'text-gray-900 dark:text-white'
+                      }`}
+                    >
+                      {weekBreakdown.week2Hours.toFixed(2)} / 40.00 hrs
+                    </span>
+                  </div>
+                  <div className="w-full h-2 bg-gray-100 dark:bg-slate-800 rounded-full overflow-hidden">
+                    <div
+                      className={`h-full rounded-full transition-all duration-300 ${
+                        weekBreakdown.week2Hours > 40
+                          ? 'bg-rose-600'
+                          : weekBreakdown.week2Hours >= 40
+                            ? 'bg-emerald-600'
+                            : 'bg-indigo-600'
+                      }`}
+                      style={{ width: `${weekBreakdown.week2Percent}%` }}
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* =========================================================================
               MOBILE ACCORDION VIEW (<768px, md breakpoint)
               - 14 stacked day cards
               - Collapsible accordion. Past/future days collapsed by default.
@@ -1410,9 +2222,30 @@ export default function App() {
             
             {/* Mobile Top Bar: Mini Summary + Jump to Today + Expand/Collapse All */}
             <div className="sticky top-2 z-20 mb-3 bg-white dark:bg-slate-900 p-2.5 rounded-xl border border-gray-200 dark:border-slate-800 shadow-sm flex items-center justify-between gap-2">
-              <div className="text-xs font-bold text-gray-700 dark:text-slate-300">
-                <span>Total: <strong className="text-indigo-600 dark:text-indigo-400 font-black">{totalHours || '0.00'}</strong> hrs</span>
-                <span className="mx-1.5 opacity-40">•</span>
+              <div className="text-xs font-bold text-gray-700 dark:text-slate-300 flex items-center flex-wrap gap-1">
+                <span>
+                  Total:{' '}
+                  <strong
+                    className={`font-black ${
+                      isOvertimePeriod
+                        ? 'text-rose-600 dark:text-rose-400'
+                        : 'text-indigo-600 dark:text-indigo-400'
+                    }`}
+                  >
+                    {totalHours || '0.00'}
+                  </strong>{' '}
+                  hrs
+                </span>
+                {isOvertimePeriod && (
+                  <span
+                    className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-md bg-rose-100 dark:bg-rose-950/70 text-rose-700 dark:text-rose-300 border border-rose-300 dark:border-rose-800 text-[10px] font-extrabold uppercase tracking-tight"
+                    title={`${overtimePeriodHours.toFixed(2)} hours over 40 in this period`}
+                  >
+                    <AlertTriangle className="w-3 h-3 text-rose-600 dark:text-rose-400 shrink-0" />
+                    <span>+{overtimePeriodHours.toFixed(2)} OT</span>
+                  </span>
+                )}
+                <span className="mx-1 opacity-40">•</span>
                 <span className="text-gray-500 dark:text-slate-400">{filledDaysCount} of {records.length} filled</span>
               </div>
 
@@ -1454,6 +2287,7 @@ export default function App() {
                 const errors = getErrors(record);
                 const outOfRange = isDateOutOfRange(record.date);
                 const dayWarning = getDayValidationWarning(record);
+                const holiday = holidayMap[record.date];
 
                 return (
                   <div
@@ -1466,6 +2300,8 @@ export default function App() {
                         ? 'border-2 border-indigo-600 dark:border-indigo-500 ring-2 ring-indigo-500/20'
                         : dayWarning
                         ? 'border-2 border-amber-300 dark:border-amber-600/80'
+                        : holiday
+                        ? 'border-2 border-violet-300 dark:border-violet-700 bg-violet-50/15 dark:bg-violet-950/15'
                         : 'border border-gray-200/90 dark:border-slate-700/80'
                     }`}
                   >
@@ -1475,16 +2311,48 @@ export default function App() {
                       onClick={() => toggleAccordion(index)}
                       className="w-full min-h-[52px] p-3.5 flex items-center justify-between text-left focus:outline-none"
                     >
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="text-base font-bold text-gray-900 dark:text-white">
+                      <div className="flex items-baseline gap-2 flex-wrap">
+                        <span className="text-lg sm:text-xl font-black text-gray-900 dark:text-white tracking-tight">
                           {record.day}
                         </span>
-                        <span className="text-xs font-medium text-gray-500 dark:text-slate-400">
-                          {record.date ? record.date.slice(5) : ''}
-                        </span>
+                        {(() => {
+                          const { monthShort, dayNum, yearSuffix } = getSmartDateParts(record.date);
+                          return (
+                            <span className="inline-flex items-baseline gap-1 text-gray-700 dark:text-slate-200">
+                              {monthShort && (
+                                <span className="text-base sm:text-lg font-bold text-gray-600 dark:text-slate-300">
+                                  {monthShort}
+                                </span>
+                              )}
+                              <span className="text-xl sm:text-2xl font-black font-mono tabular-nums text-gray-900 dark:text-white">
+                                {dayNum}
+                              </span>
+                              {yearSuffix && (
+                                <span className="text-sm font-bold text-gray-500 dark:text-slate-400">
+                                  {yearSuffix}
+                                </span>
+                              )}
+                            </span>
+                          );
+                        })()}
                         {isToday && (
                           <span className="bg-indigo-600 text-white text-[11px] font-extrabold px-2 py-0.5 rounded-full uppercase tracking-wider">
                             Today
+                          </span>
+                        )}
+                        {holiday && (
+                          <span
+                            title={`Public Holiday: ${holiday.name}`}
+                            className="inline-flex items-center gap-1 text-[10px] font-extrabold text-violet-800 dark:text-violet-200 bg-violet-100 dark:bg-violet-950/80 border border-violet-300 dark:border-violet-700 px-2 py-0.5 rounded-full"
+                          >
+                            <Calendar className="w-2.5 h-2.5 text-violet-600 dark:text-violet-400 shrink-0" />
+                            <span>{holiday.name}</span>
+                          </span>
+                        )}
+                        {isAutoLunchApplied(record) && (
+                          <span className="text-[10px] font-bold text-amber-800 dark:text-amber-200 bg-[#FEF9C3] dark:bg-amber-950/60 border border-amber-300 dark:border-amber-700 px-1.5 py-0.5 rounded-md flex items-center gap-1">
+                            <Utensils className="w-2.5 h-2.5" />
+                            <span>Auto -{shiftSettings.autoLunchDurationMins || 30}m lunch</span>
                           </span>
                         )}
                         {outOfRange && (
@@ -1552,28 +2420,61 @@ export default function App() {
                           </div>
 
                           {index > 0 && (
-                            <button
-                              type="button"
-                              onClick={() => copyPreviousDay(index)}
-                              className={`min-h-[44px] px-3 py-1 text-xs font-bold rounded-xl transition-all active:scale-95 flex items-center gap-1.5 border shadow-2xs ${
-                                copiedIndex === index
-                                  ? 'bg-emerald-50 text-emerald-700 border-emerald-300 dark:bg-emerald-950/60 dark:text-emerald-300 dark:border-emerald-700'
-                                  : 'bg-indigo-50 hover:bg-indigo-100 text-indigo-700 dark:bg-indigo-950/50 dark:hover:bg-indigo-900/60 dark:text-indigo-300 border-indigo-200/80 dark:border-indigo-800/80'
-                              }`}
-                              title={`Copy hours from previous day (${records[index - 1].day})`}
-                            >
-                              {copiedIndex === index ? (
-                                <>
-                                  <Check className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
-                                  <span>Copied ({records[index - 1].day.slice(0, 3)})</span>
-                                </>
-                              ) : (
-                                <>
-                                  <Copy className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
-                                  <span>Copy Previous Day</span>
-                                </>
+                            <div className="relative">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setMobileToolMenuDayIndex(prev => (prev === index ? null : index))
+                                }
+                                className={`min-h-[44px] px-3 py-1 text-xs font-bold rounded-xl transition-all active:scale-95 flex items-center gap-1.5 border shadow-2xs ${
+                                  copiedIndex === index
+                                    ? 'bg-emerald-50 text-emerald-700 border-emerald-300 dark:bg-emerald-950/60 dark:text-emerald-300 dark:border-emerald-700'
+                                    : mobileToolMenuDayIndex === index
+                                      ? 'bg-indigo-100 text-indigo-800 border-indigo-300 dark:bg-indigo-900/70 dark:text-indigo-200 dark:border-indigo-700'
+                                      : 'bg-gray-100 hover:bg-gray-200 text-gray-700 dark:bg-slate-800 dark:hover:bg-slate-700 dark:text-slate-200 border-gray-300/80 dark:border-slate-700'
+                                }`}
+                                title="Day Tools"
+                                aria-expanded={mobileToolMenuDayIndex === index}
+                              >
+                                {copiedIndex === index ? (
+                                  <>
+                                    <Check className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                                    <span>Copied ({records[index - 1].day.slice(0, 3)})</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <Wrench className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+                                    <span>Tools</span>
+                                    <ChevronDown
+                                      className={`w-3.5 h-3.5 transition-transform ${
+                                        mobileToolMenuDayIndex === index ? 'rotate-180' : ''
+                                      }`}
+                                    />
+                                  </>
+                                )}
+                              </button>
+
+                              {mobileToolMenuDayIndex === index && (
+                                <div className="absolute right-0 mt-1.5 w-56 bg-white dark:bg-slate-900 rounded-2xl shadow-xl border border-gray-200 dark:border-slate-700 p-1.5 z-30">
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setMobileToolMenuDayIndex(null);
+                                      setCopyConfirmDayIndex(index);
+                                    }}
+                                    className="w-full min-h-[42px] px-3 py-2 text-xs font-bold text-left rounded-xl text-indigo-700 dark:text-indigo-300 hover:bg-indigo-50 dark:hover:bg-indigo-950/60 flex items-center gap-2 transition-colors"
+                                  >
+                                    <Copy className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400 shrink-0" />
+                                    <div className="flex flex-col">
+                                      <span>Copy Previous Day</span>
+                                      <span className="text-[10px] font-medium text-gray-500 dark:text-slate-400">
+                                        From {records[index - 1].day} ({records[index - 1].totalHours} hrs)
+                                      </span>
+                                    </div>
+                                  </button>
+                                </div>
                               )}
-                            </button>
+                            </div>
                           )}
                         </div>
 
@@ -1801,40 +2702,40 @@ export default function App() {
                 * TOTAL HRS: extra large bold, pure white background
               ========================================================================= */}
           <div className="hidden md:block print:block pdf:block overflow-x-auto print:overflow-visible pdf:overflow-visible mb-8 border border-gray-200 dark:border-slate-800 rounded-2xl print:border-none print:rounded-none bg-white dark:bg-slate-900">
-            <table className="min-w-full print:w-full pdf:w-full print:table-fixed pdf:table-fixed divide-y divide-gray-200 dark:divide-slate-800 print:divide-gray-800 pdf:divide-gray-800">
+            <table className="w-full table-fixed divide-y divide-gray-200 dark:divide-slate-800 print:divide-gray-800 pdf:divide-gray-800">
               <thead className="bg-gray-50/80 dark:bg-slate-800/60 print:bg-transparent pdf:bg-transparent">
                 <tr>
-                  <th scope="col" className="px-3 py-3.5 text-left text-xs font-bold text-gray-600 dark:text-slate-300 uppercase tracking-wider w-36 print:w-[15%]">
+                  <th scope="col" className="px-2.5 lg:px-3 py-3 text-left text-xs font-bold text-gray-600 dark:text-slate-300 uppercase tracking-wider w-[13%] print:w-[15%]">
                     Date
                   </th>
-                  <th scope="col" className="px-3 py-3.5 text-left text-xs font-bold text-emerald-700 dark:text-emerald-400 uppercase tracking-wider w-40 print:w-[14%] bg-white dark:bg-slate-900">
-                    <span className="flex items-center gap-1.5">
-                      <LogIn className="w-4 h-4 text-emerald-600 inline" />
-                      Time In
+                  <th scope="col" className="px-2.5 lg:px-3 py-3 text-left text-xs font-bold text-emerald-700 dark:text-emerald-400 uppercase tracking-wider w-[16%] print:w-[14%] bg-white dark:bg-slate-900">
+                    <span className="flex items-center gap-1">
+                      <LogIn className="w-3.5 h-3.5 text-emerald-600 shrink-0 inline" />
+                      <span>Time In</span>
                     </span>
                   </th>
-                  <th scope="col" className="px-3 py-3.5 text-left text-xs font-bold text-amber-900 dark:text-amber-200 uppercase tracking-wider w-36 print:w-[13%] bg-[#FEF9C3] dark:bg-amber-950/40">
-                    <span className="flex items-center gap-1.5">
-                      <Utensils className="w-3.5 h-3.5 text-amber-700 dark:text-amber-300 inline" />
-                      Lunch Start
+                  <th scope="col" className="px-2 lg:px-3 py-3 text-left text-xs font-bold text-amber-900 dark:text-amber-200 uppercase tracking-wider w-[13.5%] print:w-[13%] bg-[#FEF9C3] dark:bg-amber-950/40">
+                    <span className="flex items-center gap-1">
+                      <Utensils className="w-3.5 h-3.5 text-amber-700 dark:text-amber-300 shrink-0 inline" />
+                      <span className="truncate">Lunch Start</span>
                     </span>
                   </th>
-                  <th scope="col" className="px-3 py-3.5 text-left text-xs font-bold text-amber-900 dark:text-amber-200 uppercase tracking-wider w-36 print:w-[13%] bg-[#FEF9C3] dark:bg-amber-950/40">
-                    <span className="flex items-center gap-1.5">
-                      <Utensils className="w-3.5 h-3.5 text-amber-700 dark:text-amber-300 inline" />
-                      Lunch End
+                  <th scope="col" className="px-2 lg:px-3 py-3 text-left text-xs font-bold text-amber-900 dark:text-amber-200 uppercase tracking-wider w-[13.5%] print:w-[13%] bg-[#FEF9C3] dark:bg-amber-950/40">
+                    <span className="flex items-center gap-1">
+                      <Utensils className="w-3.5 h-3.5 text-amber-700 dark:text-amber-300 shrink-0 inline" />
+                      <span className="truncate">Lunch End</span>
                     </span>
                   </th>
-                  <th scope="col" className="px-3 py-3.5 text-left text-xs font-bold text-rose-700 dark:text-rose-400 uppercase tracking-wider w-40 print:w-[14%] bg-white dark:bg-slate-900">
-                    <span className="flex items-center gap-1.5">
-                      <LogOut className="w-4 h-4 text-rose-600 inline" />
-                      Time Out
+                  <th scope="col" className="px-2.5 lg:px-3 py-3 text-left text-xs font-bold text-rose-700 dark:text-rose-400 uppercase tracking-wider w-[16%] print:w-[14%] bg-white dark:bg-slate-900">
+                    <span className="flex items-center gap-1">
+                      <LogOut className="w-3.5 h-3.5 text-rose-600 shrink-0 inline" />
+                      <span>Time Out</span>
                     </span>
                   </th>
-                  <th scope="col" className="px-2 py-3.5 text-center text-xs font-extrabold text-gray-900 dark:text-white uppercase tracking-wider w-24 print:w-[11%] bg-white dark:bg-slate-900">
+                  <th scope="col" className="px-2 py-3 text-center text-xs font-extrabold text-gray-900 dark:text-white uppercase tracking-wider w-[10%] print:w-[11%] bg-white dark:bg-slate-900">
                     Total Hrs
                   </th>
-                  <th scope="col" className="px-3 py-3.5 text-left text-xs font-bold text-gray-600 dark:text-slate-300 uppercase tracking-wider bg-white dark:bg-slate-900">
+                  <th scope="col" className="px-2.5 lg:px-3 py-3 text-left text-xs font-bold text-gray-600 dark:text-slate-300 uppercase tracking-wider w-[18%] bg-white dark:bg-slate-900">
                     Notes
                   </th>
                 </tr>
@@ -1844,51 +2745,131 @@ export default function App() {
                   const isToday = record.date === todayDateStr;
                   const outOfRange = isDateOutOfRange(record.date);
                   const dayWarning = getDayValidationWarning(record);
+                  const holiday = holidayMap[record.date];
+
+                  const dayNumericHours = parseFloat(record.totalHours || '0') || 0;
+                  const dailyOtForRow =
+                    isDailyOvertimeMode && dayNumericHours > 8 ? dayNumericHours - 8 : 0;
 
                   return (
                     <tr
                       key={index}
-                      className={`hover:bg-gray-50/60 dark:hover:bg-slate-800/40 transition-colors ${
-                        isToday ? 'bg-indigo-50/30 dark:bg-indigo-950/20' : ''
+                      className={`group hover:bg-gray-50/60 dark:hover:bg-slate-800/40 transition-all ${
+                        isToday
+                          ? 'today-row-glow bg-indigo-50/40 dark:bg-indigo-950/30'
+                          : holiday
+                          ? 'bg-violet-50/35 dark:bg-violet-950/20'
+                          : ''
                       }`}
                     >
                       {/* DATE */}
-                      <td className="px-3 py-2.5 align-middle bg-white dark:bg-slate-900">
-                        <div className="flex items-center gap-1.5">
-                          <span className="text-sm font-bold text-gray-900 dark:text-white">
-                            {record.day.slice(0, 3)}
-                          </span>
-                          {isToday && (
-                            <span className="text-[10px] font-bold bg-indigo-600 text-white px-1.5 py-0.2 rounded-full uppercase">
-                              Today
+                      <td
+                        className={`px-2.5 lg:px-3 py-2.5 align-middle ${
+                          isToday
+                            ? 'bg-indigo-50/45 dark:bg-indigo-950/35 border-l-4 border-l-indigo-600 dark:border-l-indigo-400 print:bg-white print:border-l-0'
+                            : holiday
+                            ? 'bg-violet-50/45 dark:bg-violet-950/25 border-l-4 border-l-violet-500 dark:border-l-violet-400 print:bg-white print:border-l-0'
+                            : 'bg-white dark:bg-slate-900'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-1 flex-wrap">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="text-lg lg:text-xl xl:text-[22px] font-black text-gray-900 dark:text-white tracking-tight leading-none">
+                              {record.day.slice(0, 3)}
                             </span>
+                            {isToday && (
+                              <span className="text-[10px] font-extrabold bg-indigo-600 text-white px-2 py-0.5 rounded-full uppercase shadow-xs ring-2 ring-indigo-400/50 animate-pulse print:animate-none print:ring-0">
+                                Today
+                              </span>
+                            )}
+                          </div>
+                          {index > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => copyPreviousDay(index)}
+                              className={`flex items-center gap-0.5 px-1.5 py-0.5 text-[10px] font-semibold text-indigo-600 hover:text-indigo-800 dark:text-indigo-400 dark:hover:text-indigo-300 bg-indigo-50/70 hover:bg-indigo-100 dark:bg-indigo-950/50 rounded transition-all active:scale-95 print:hidden pdf:hidden ${
+                                copiedIndex === index
+                                  ? 'opacity-100'
+                                  : 'opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus:opacity-100 focus:pointer-events-auto'
+                              }`}
+                              title={`Copy time entries from previous day (${records[index - 1].day})`}
+                            >
+                              {copiedIndex === index ? (
+                                <>
+                                  <Check className="w-2.5 h-2.5 text-emerald-600" />
+                                  <span className="text-emerald-600 font-bold">Copied</span>
+                                </>
+                              ) : (
+                                <>
+                                  <Copy className="w-2.5 h-2.5 text-indigo-500" />
+                                  <span>Copy prev</span>
+                                </>
+                              )}
+                            </button>
                           )}
                         </div>
-                        <input
-                          type="date"
-                          value={record.date}
-                          onChange={e => handleRecordChange(index, 'date', e.target.value)}
-                          className="mt-0.5 text-xs text-gray-500 dark:text-slate-400 bg-transparent border-none p-0 focus:ring-0"
-                        />
-                        {index > 0 && (
-                          <button
-                            type="button"
-                            onClick={() => copyPreviousDay(index)}
-                            className="mt-1 flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-semibold text-indigo-600 hover:text-indigo-800 dark:text-indigo-400 dark:hover:text-indigo-300 hover:bg-indigo-50 dark:hover:bg-indigo-950/50 rounded transition-all active:scale-95 print:hidden pdf:hidden"
-                            title={`Copy time entries from previous day (${records[index - 1].day})`}
-                          >
-                            {copiedIndex === index ? (
-                              <>
-                                <Check className="w-2.5 h-2.5 text-emerald-600" />
-                                <span className="text-emerald-600 font-bold">Copied!</span>
-                              </>
-                            ) : (
-                              <>
-                                <Copy className="w-2.5 h-2.5 text-indigo-500" />
-                                <span>Copy prev</span>
-                              </>
+                        <label className="relative block mt-1 cursor-pointer group/date">
+                          {(() => {
+                            const { monthShort, dayNum, yearSuffix } = getSmartDateParts(record.date);
+                            return (
+                              <span className="inline-flex items-baseline gap-1 text-gray-800 dark:text-slate-200 group-hover/date:text-indigo-600 dark:group-hover/date:text-indigo-400 transition-colors leading-none">
+                                {monthShort && (
+                                  <span className="text-base lg:text-lg font-extrabold text-gray-600 dark:text-slate-300 group-hover/date:text-indigo-600 dark:group-hover/date:text-indigo-400">
+                                    {monthShort}
+                                  </span>
+                                )}
+                                <span className="text-xl lg:text-2xl xl:text-[25px] font-black font-mono tabular-nums text-gray-900 dark:text-white group-hover/date:text-indigo-600 dark:group-hover/date:text-indigo-400">
+                                  {dayNum}
+                                </span>
+                                {yearSuffix && (
+                                  <span className="text-sm lg:text-base font-bold text-gray-500 dark:text-slate-400">
+                                    {yearSuffix}
+                                  </span>
+                                )}
+                              </span>
+                            );
+                          })()}
+                          <input
+                            type="date"
+                            value={record.date}
+                            onClick={e => {
+                              try {
+                                (e.currentTarget as any).showPicker?.();
+                              } catch {}
+                            }}
+                            onChange={e => handleRecordChange(index, 'date', e.target.value)}
+                            className="sr-only"
+                            aria-label={`Date for ${record.day}`}
+                          />
+                        </label>
+                        {holiday && (
+                          <div className="mt-1 flex items-center gap-1 flex-wrap">
+                            <span
+                              title={`Public Holiday: ${holiday.name}`}
+                              className="inline-flex items-center gap-1 text-[10px] font-extrabold bg-violet-100 dark:bg-violet-950/80 text-violet-800 dark:text-violet-200 border border-violet-300 dark:border-violet-700 px-1.5 py-0.5 rounded-md max-w-full truncate"
+                            >
+                              <Calendar className="w-2.5 h-2.5 text-violet-600 dark:text-violet-400 shrink-0" />
+                              <span className="truncate">{holiday.name}</span>
+                            </span>
+                            {!record.notes?.includes(holiday.name) && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  handleRecordChange(
+                                    index,
+                                    'notes',
+                                    record.notes
+                                      ? `${record.notes} • Holiday: ${holiday.name}`
+                                      : `Public Holiday — ${holiday.name}`
+                                  )
+                                }
+                                className="text-[9px] font-bold text-violet-700 dark:text-violet-300 underline opacity-0 group-hover:opacity-100 transition-opacity print:hidden pdf:hidden"
+                                title="Add holiday note to this row"
+                              >
+                                +Note
+                              </button>
                             )}
-                          </button>
+                          </div>
                         )}
                         {outOfRange && (
                           <div className="text-[10px] text-amber-600 flex items-center gap-0.5 print:hidden pdf:hidden">
@@ -1898,103 +2879,131 @@ export default function App() {
                         )}
                       </td>
 
-                      {/* TIME IN: STRICT PURE WHITE, LARGE BOLD 26-28px */}
-                      <td className="px-3 py-2.5 align-middle bg-white dark:bg-slate-900">
-                        <div className="flex items-center gap-2">
+                      {/* TIME IN: STRICT PURE WHITE, LARGE BOLD */}
+                      <td className="px-2.5 lg:px-3 py-2 align-middle bg-white dark:bg-slate-900">
+                        <div className="flex flex-col gap-1">
                           <input
                             type="time"
                             value={record.timeIn}
+                            onClick={e => {
+                              try {
+                                (e.currentTarget as any).showPicker?.();
+                              } catch {}
+                            }}
                             onChange={e => handleRecordChange(index, 'timeIn', e.target.value)}
-                            className="time-input-mono w-full text-[28px] font-black font-mono tracking-tight tabular-nums text-gray-900 dark:text-white bg-white dark:bg-slate-900 border-none p-0 focus:ring-0 print:text-[14px] pdf:text-[14px]"
+                            className="time-input-mono w-full text-[19px] lg:text-[22px] xl:text-[24px] font-black font-mono tracking-tight tabular-nums text-gray-900 dark:text-white bg-white dark:bg-slate-900 border-none p-0 focus:ring-0 cursor-pointer print:text-[14px] pdf:text-[14px]"
                           />
-                          <button
-                            type="button"
-                            onClick={() => handleRecordChange(index, 'timeIn', getCurrentTime())}
-                            className="min-h-[32px] px-2 py-0.5 text-[11px] font-bold text-indigo-700 bg-indigo-50 dark:bg-indigo-900/30 rounded-md hover:bg-indigo-100 active:scale-95 print:hidden pdf:hidden"
-                          >
-                            Now
-                          </button>
+                          <div className="flex justify-start print:hidden pdf:hidden opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-within:opacity-100 focus-within:pointer-events-auto transition-opacity duration-150">
+                            <button
+                              type="button"
+                              onClick={() => handleRecordChange(index, 'timeIn', getCurrentTime())}
+                              className="px-2 py-0.5 text-[10px] font-bold text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-900/30 rounded hover:bg-indigo-100 active:scale-95 transition-colors"
+                            >
+                              Now
+                            </button>
+                          </div>
                         </div>
                       </td>
 
-                      {/* LUNCH START: STRICT LIGHT YELLOW #FEF9C3 ONLY, 17-18px */}
-                      <td className="px-3 py-2.5 align-middle bg-[#FEF9C3] dark:bg-amber-950/40">
-                        <div className="flex items-center gap-1.5">
+                      {/* LUNCH START: STRICT LIGHT YELLOW #FEF9C3 ONLY */}
+                      <td className="px-2 lg:px-2.5 py-2 align-middle bg-[#FEF9C3] dark:bg-amber-950/40">
+                        <div className="flex flex-col gap-1">
                           <input
                             type="time"
                             value={record.lunchStart}
+                            onClick={e => {
+                              try {
+                                (e.currentTarget as any).showPicker?.();
+                              } catch {}
+                            }}
                             onChange={e => handleRecordChange(index, 'lunchStart', e.target.value)}
-                            className="time-input-mono w-full text-[17px] font-bold font-mono tracking-tight tabular-nums text-gray-900 dark:text-amber-100 bg-transparent border-none p-0 focus:ring-0 print:text-[12px] pdf:text-[12px]"
+                            className="time-input-mono w-full text-[15px] lg:text-[16px] xl:text-[17px] font-bold font-mono tracking-tight tabular-nums text-gray-900 dark:text-amber-100 bg-transparent border-none p-0 focus:ring-0 cursor-pointer print:text-[12px] pdf:text-[12px]"
                           />
-                          <button
-                            type="button"
-                            onClick={() => handleRecordChange(index, 'lunchStart', getCurrentTime())}
-                            className="min-h-[30px] px-1.5 py-0.5 text-[10px] font-bold text-amber-900 bg-amber-100/90 dark:bg-amber-900/50 rounded active:scale-95 print:hidden pdf:hidden"
-                          >
-                            Now
-                          </button>
+                          <div className="flex justify-start print:hidden pdf:hidden opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-within:opacity-100 focus-within:pointer-events-auto transition-opacity duration-150">
+                            <button
+                              type="button"
+                              onClick={() => handleRecordChange(index, 'lunchStart', getCurrentTime())}
+                              className="px-1.5 py-0.5 text-[10px] font-bold text-amber-900 dark:text-amber-200 bg-amber-200/70 dark:bg-amber-900/50 rounded hover:bg-amber-200 active:scale-95 transition-colors"
+                            >
+                              Now
+                            </button>
+                          </div>
                         </div>
                       </td>
 
-                      {/* LUNCH END: STRICT LIGHT YELLOW #FEF9C3 ONLY, 17-18px */}
-                      <td className="px-3 py-2.5 align-middle bg-[#FEF9C3] dark:bg-amber-950/40">
-                        <div className="flex items-center gap-1.5">
+                      {/* LUNCH END: STRICT LIGHT YELLOW #FEF9C3 ONLY */}
+                      <td className="px-2 lg:px-2.5 py-2 align-middle bg-[#FEF9C3] dark:bg-amber-950/40">
+                        <div className="flex flex-col gap-1">
                           <input
                             type="time"
                             value={record.lunchEnd}
+                            onClick={e => {
+                              try {
+                                (e.currentTarget as any).showPicker?.();
+                              } catch {}
+                            }}
                             onChange={e => handleRecordChange(index, 'lunchEnd', e.target.value)}
-                            className="time-input-mono w-full text-[17px] font-bold font-mono tracking-tight tabular-nums text-gray-900 dark:text-amber-100 bg-transparent border-none p-0 focus:ring-0 print:text-[12px] pdf:text-[12px]"
+                            className="time-input-mono w-full text-[15px] lg:text-[16px] xl:text-[17px] font-bold font-mono tracking-tight tabular-nums text-gray-900 dark:text-amber-100 bg-transparent border-none p-0 focus:ring-0 cursor-pointer print:text-[12px] pdf:text-[12px]"
                           />
-                          <button
-                            type="button"
-                            onClick={() => handleRecordChange(index, 'lunchEnd', getCurrentTime())}
-                            className="min-h-[30px] px-1.5 py-0.5 text-[10px] font-bold text-amber-900 bg-amber-100/90 dark:bg-amber-900/50 rounded active:scale-95 print:hidden pdf:hidden"
-                          >
-                            Now
-                          </button>
+                          <div className="flex justify-start print:hidden pdf:hidden opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-within:opacity-100 focus-within:pointer-events-auto transition-opacity duration-150">
+                            <button
+                              type="button"
+                              onClick={() => handleRecordChange(index, 'lunchEnd', getCurrentTime())}
+                              className="px-1.5 py-0.5 text-[10px] font-bold text-amber-900 dark:text-amber-200 bg-amber-200/70 dark:bg-amber-900/50 rounded hover:bg-amber-200 active:scale-95 transition-colors"
+                            >
+                              Now
+                            </button>
+                          </div>
                         </div>
                       </td>
 
-                      {/* TIME OUT: STRICT PURE WHITE, LARGE BOLD 26-28px */}
-                      <td className="px-3 py-2.5 align-middle bg-white dark:bg-slate-900">
-                        <div className="flex items-center gap-2">
+                      {/* TIME OUT: STRICT PURE WHITE, LARGE BOLD */}
+                      <td className="px-2.5 lg:px-3 py-2 align-middle bg-white dark:bg-slate-900">
+                        <div className="flex flex-col gap-1">
                           <input
                             type="time"
                             value={record.timeOut}
+                            onClick={e => {
+                              try {
+                                (e.currentTarget as any).showPicker?.();
+                              } catch {}
+                            }}
                             onChange={e => handleRecordChange(index, 'timeOut', e.target.value)}
-                            className="time-input-mono w-full text-[28px] font-black font-mono tracking-tight tabular-nums text-gray-900 dark:text-white bg-white dark:bg-slate-900 border-none p-0 focus:ring-0 print:text-[14px] pdf:text-[14px]"
+                            className="time-input-mono w-full text-[19px] lg:text-[22px] xl:text-[24px] font-black font-mono tracking-tight tabular-nums text-gray-900 dark:text-white bg-white dark:bg-slate-900 border-none p-0 focus:ring-0 cursor-pointer print:text-[14px] pdf:text-[14px]"
                           />
-                          <button
-                            type="button"
-                            onClick={() => handleRecordChange(index, 'timeOut', getCurrentTime())}
-                            className="min-h-[32px] px-2 py-0.5 text-[11px] font-bold text-indigo-700 bg-indigo-50 dark:bg-indigo-900/30 rounded-md hover:bg-indigo-100 active:scale-95 print:hidden pdf:hidden"
-                          >
-                            Now
-                          </button>
+                          <div className="flex justify-start print:hidden pdf:hidden opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-within:opacity-100 focus-within:pointer-events-auto transition-opacity duration-150">
+                            <button
+                              type="button"
+                              onClick={() => handleRecordChange(index, 'timeOut', getCurrentTime())}
+                              className="px-2 py-0.5 text-[10px] font-bold text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-900/30 rounded hover:bg-indigo-100 active:scale-95 transition-colors"
+                            >
+                              Now
+                            </button>
+                          </div>
                         </div>
                       </td>
 
                       {/* TOTAL HRS: EXTRA LARGE BOLD, WHITE BACKGROUND */}
-                      <td className="px-2 py-2.5 align-middle text-center bg-white dark:bg-slate-900">
+                      <td className="px-2 py-2 align-middle text-center bg-white dark:bg-slate-900">
                         <div className="flex flex-col items-center justify-center">
-                          <div className="flex items-center justify-center gap-1.5">
-                            <span className={`text-2xl font-black font-mono print:text-[14px] pdf:text-[14px] ${
+                          <div className="flex items-center justify-center gap-1">
+                            <span className={`text-xl lg:text-2xl font-black font-mono print:text-[14px] pdf:text-[14px] ${
                               dayWarning ? 'text-amber-600 dark:text-amber-400' : 'text-gray-900 dark:text-white'
                             }`}>
                               {record.totalHours || '0.00'}
                             </span>
                             {dayWarning ? (
                               <span className="text-amber-500 cursor-help print:hidden pdf:hidden" title={dayWarning}>
-                                <AlertTriangle className="w-4 h-4" />
+                                <AlertTriangle className="w-3.5 h-3.5" />
                               </span>
                             ) : record.totalHours && parseFloat(record.totalHours) > 0 ? (
                               <span className="text-emerald-500 print:hidden pdf:hidden" title="Valid shift entry">
-                                <CheckCircle2 className="w-4 h-4" />
+                                <CheckCircle2 className="w-3.5 h-3.5" />
                               </span>
                             ) : null}
                           </div>
                           {dayWarning && (
-                            <span className="text-[10px] text-amber-600 dark:text-amber-400 font-medium leading-tight print:hidden pdf:hidden max-w-[110px] truncate" title={dayWarning}>
+                            <span className="text-[10px] text-amber-600 dark:text-amber-400 font-medium leading-tight print:hidden pdf:hidden max-w-[95px] truncate" title={dayWarning}>
                               {dayWarning}
                             </span>
                           )}
@@ -2003,17 +3012,33 @@ export default function App() {
                               <Check className="w-2.5 h-2.5" /> Valid
                             </span>
                           )}
+                          {isAutoLunchApplied(record) && (
+                            <span
+                              className="mt-0.5 px-1.5 py-0.2 rounded bg-[#FEF9C3] dark:bg-amber-950/60 border border-amber-300 dark:border-amber-700 text-[9px] font-bold text-amber-900 dark:text-amber-200 leading-tight print:hidden pdf:hidden"
+                              title={`Automatically deducted ${shiftSettings.autoLunchDurationMins || 30} mins default lunch break for shift > ${shiftSettings.autoLunchMinShiftHours || 6} hrs`}
+                            >
+                              Auto -{shiftSettings.autoLunchDurationMins || 30}m lunch
+                            </span>
+                          )}
+                          {dailyOtForRow > 0 && (
+                            <span
+                              className="mt-0.5 px-1.5 py-0.2 rounded bg-rose-100 dark:bg-rose-950/70 border border-rose-300 dark:border-rose-700 text-[9px] font-extrabold text-rose-700 dark:text-rose-300 leading-tight print:hidden pdf:hidden"
+                              title={`Daily Overtime: ${dailyOtForRow.toFixed(2)} hrs worked beyond 8 hours in a single day`}
+                            >
+                              +{dailyOtForRow.toFixed(2)}h Daily OT
+                            </span>
+                          )}
                         </div>
                       </td>
 
                       {/* NOTES: WHITE BACKGROUND, PLACEHOLDER HIDDEN ON PRINT */}
-                      <td className="px-3 py-2.5 align-middle bg-white dark:bg-slate-900">
+                      <td className="px-2.5 lg:px-3 py-2 align-middle bg-white dark:bg-slate-900">
                         <input
                           type="text"
                           value={record.notes}
                           onChange={e => handleRecordChange(index, 'notes', e.target.value)}
                           placeholder="e.g., Overtime"
-                          className="w-full text-sm font-medium text-gray-900 dark:text-white bg-transparent border-none p-0 focus:ring-0 print:placeholder-transparent pdf:placeholder-transparent"
+                          className="w-full text-xs lg:text-sm font-medium text-gray-900 dark:text-white bg-white dark:bg-slate-900 border border-gray-200/80 dark:border-slate-700/80 rounded-lg px-2.5 py-1.5 focus:ring-2 focus:ring-indigo-500 print:border-none print:p-0 print:placeholder-transparent pdf:placeholder-transparent"
                         />
                       </td>
                     </tr>
@@ -2030,10 +3055,10 @@ export default function App() {
               - Canvas Drawing has Undo / Redo / Clear Signature
               - Total Hours hero display (pure white background)
               ========================================================================= */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-4 border-t border-gray-200/80 dark:border-slate-800 items-start">
+          <div className="grid grid-cols-1 md:grid-cols-2 print:grid-cols-2 gap-6 print:gap-4 pt-4 print:pt-2.5 border-t border-gray-200/80 dark:border-slate-800 items-start print:break-inside-avoid">
             
             {/* Signature Section */}
-            <div className="space-y-3">
+            <div className="space-y-3 print:space-y-1.5 min-w-0">
               <div className="flex items-center justify-between">
                 <label className="block text-xs font-bold uppercase tracking-wider text-gray-600 dark:text-slate-400">
                   Employee Signature
@@ -2081,7 +3106,7 @@ export default function App() {
                       penColor={isDarkMode ? '#ffffff' : '#000000'}
                       clearOnResize={false}
                       canvasProps={{
-                        className: 'w-full h-36 sm:h-44 bg-white dark:bg-slate-800 cursor-crosshair'
+                        className: 'w-full h-36 sm:h-44 print:h-24 bg-white dark:bg-slate-800 cursor-crosshair'
                       }}
                       onEnd={handleCanvasEnd}
                     />
@@ -2122,17 +3147,17 @@ export default function App() {
                   </div>
                 </div>
               ) : (
-                <div className="space-y-3">
+                <div className="space-y-3 print:space-y-1.5">
                   <input
                     type="text"
                     value={typedName}
                     onChange={e => handleTypedNameChange(e.target.value)}
                     placeholder="Type your full name as signature"
-                    className="w-full min-h-[48px] px-4 py-2 text-base font-semibold text-gray-900 dark:text-white bg-white dark:bg-slate-800 border border-gray-300 dark:border-slate-700 rounded-2xl focus:ring-2 focus:ring-indigo-500"
+                    className="w-full min-h-[48px] px-4 py-2 text-base font-semibold text-gray-900 dark:text-white bg-white dark:bg-slate-800 border border-gray-300 dark:border-slate-700 rounded-2xl focus:ring-2 focus:ring-indigo-500 print:hidden"
                   />
                   {typedName && (
-                    <div className="p-4 border border-indigo-200 dark:border-indigo-900/60 rounded-2xl bg-indigo-50/40 dark:bg-indigo-950/20">
-                      <div className="font-signature text-3xl sm:text-4xl text-gray-900 dark:text-white italic">
+                    <div className="p-4 print:p-2.5 border border-indigo-200 dark:border-indigo-900/60 rounded-2xl bg-indigo-50/40 dark:bg-indigo-950/20">
+                      <div className="font-signature text-3xl sm:text-4xl print:text-2xl text-gray-900 dark:text-white italic">
                         {typedName}
                       </div>
                       <div className="text-[11px] text-gray-500 dark:text-slate-400 mt-1 flex items-center gap-1">
@@ -2145,7 +3170,7 @@ export default function App() {
               )}
 
               {/* Signature Date */}
-              <div className="pt-2">
+              <div className="pt-2 print:pt-1">
                 <label className="block text-xs font-bold uppercase tracking-wider text-gray-600 dark:text-slate-400 mb-1">
                   Signature Date
                 </label>
@@ -2153,34 +3178,140 @@ export default function App() {
                   type="date"
                   value={date}
                   onChange={e => setDate(e.target.value)}
-                  className="min-h-[44px] px-3 py-1.5 text-base font-semibold text-gray-900 dark:text-white bg-white dark:bg-slate-800 border border-gray-300 dark:border-slate-700 rounded-xl focus:ring-2 focus:ring-indigo-500"
+                  className="min-h-[44px] print:min-h-0 px-3 py-1.5 print:p-1 text-base print:text-xs font-semibold text-gray-900 dark:text-white bg-white dark:bg-slate-800 border border-gray-300 dark:border-slate-700 rounded-xl focus:ring-2 focus:ring-indigo-500"
                 />
               </div>
             </div>
 
             {/* Total Hours Card (STRICT PURE WHITE BACKGROUND, EXTRA LARGE BOLD) */}
-            <div className="bg-white dark:bg-slate-800 p-6 sm:p-8 rounded-2xl border border-gray-200 dark:border-slate-700 space-y-4">
-              <div className="flex items-center justify-between">
-                <span className="text-sm font-bold uppercase tracking-wider text-gray-600 dark:text-slate-400">
+            <div
+              className={`bg-white dark:bg-slate-800 p-6 sm:p-8 print:p-3.5 rounded-2xl border min-w-0 overflow-hidden ${
+                isOvertimePeriod
+                  ? 'border-rose-300 dark:border-rose-700 ring-1 ring-rose-500/20'
+                  : 'border-gray-200 dark:border-slate-700'
+              } space-y-4 print:space-y-2`}
+            >
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <span className="text-sm print:text-xs font-bold uppercase tracking-wider text-gray-600 dark:text-slate-400">
                   Total Period Hours
                 </span>
-                <span className="text-xs font-semibold px-2.5 py-1 bg-indigo-50 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300 rounded-lg">
-                  {shiftSettings.period}
+                <div className="flex items-center gap-2">
+                  {isOvertimePeriod && (
+                    <span className="inline-flex items-center gap-1 text-xs print:text-[10px] font-extrabold px-2.5 py-1 print:px-1.5 print:py-0.5 bg-rose-100 dark:bg-rose-950/70 text-rose-700 dark:text-rose-300 border border-rose-300 dark:border-rose-800 rounded-lg uppercase tracking-wide">
+                      <AlertTriangle className="w-3.5 h-3.5 text-rose-600 dark:text-rose-400" />
+                      <span>Overtime (&gt;40 hrs)</span>
+                    </span>
+                  )}
+                  <span className="text-xs print:text-[10px] font-semibold px-2.5 py-1 print:px-1.5 print:py-0.5 bg-indigo-50 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300 rounded-lg">
+                    {shiftSettings.period}
+                  </span>
+                </div>
+              </div>
+
+              <div
+                className={`text-4xl sm:text-5xl print:text-2xl font-black font-mono tracking-tight ${
+                  isOvertimePeriod
+                    ? 'text-rose-600 dark:text-rose-400'
+                    : 'text-gray-900 dark:text-white'
+                }`}
+              >
+                {totalHours || '0.00'}
+                <span
+                  className={`text-lg sm:text-xl print:text-sm font-bold ml-2 ${
+                    isOvertimePeriod
+                      ? 'text-rose-500 dark:text-rose-400'
+                      : 'text-gray-400 dark:text-slate-500'
+                  }`}
+                >
+                  hrs
                 </span>
               </div>
 
-              <div className="text-4xl sm:text-5xl font-black text-gray-900 dark:text-white font-mono tracking-tight">
-                {totalHours || '0.00'}
-                <span className="text-lg sm:text-xl font-bold text-gray-400 dark:text-slate-500 ml-2">hrs</span>
+              {/* Compact 40-Hour Target Progress inside Summary Card */}
+              <div className="space-y-1.5 print:hidden pdf:hidden">
+                <div className="flex items-center justify-between text-xs font-bold">
+                  <span className="text-gray-500 dark:text-slate-400">40-Hr Weekly Target</span>
+                  <span
+                    className={
+                      isOvertimePeriod
+                        ? 'text-rose-600 dark:text-rose-400'
+                        : numericTotalHours >= 40
+                          ? 'text-emerald-600 dark:text-emerald-400'
+                          : 'text-indigo-600 dark:text-indigo-400'
+                    }
+                  >
+                    {isOvertimePeriod
+                      ? `100% (+${overtimePeriodHours.toFixed(2)}h OT)`
+                      : `${Math.round(targetProgressPercent)}% (${remainingToTargetHours.toFixed(2)}h left)`}
+                  </span>
+                </div>
+                <div className="w-full h-2.5 bg-gray-100 dark:bg-slate-700 rounded-full overflow-hidden">
+                  <div
+                    className={`h-full rounded-full transition-all duration-500 ${
+                      isOvertimePeriod
+                        ? 'bg-rose-600'
+                        : numericTotalHours >= 40
+                          ? 'bg-emerald-600'
+                          : 'bg-indigo-600'
+                    }`}
+                    style={{ width: `${targetProgressPercent}%` }}
+                  />
+                </div>
               </div>
 
-              <p className="text-xs text-gray-500 dark:text-slate-400 leading-relaxed">
-                Total hours are automatically calculated based on Time In, Time Out, and Lunch deduction.
+              {/* Visual Overtime Breakdown (Both Mobile & Desktop) */}
+              <div className="grid grid-cols-2 gap-3 print:gap-2 pt-1 print:pt-0">
+                <div className="p-3 print:p-2 rounded-xl border border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-900/60">
+                  <div className="text-[11px] print:text-[9px] font-bold uppercase tracking-wider text-gray-500 dark:text-slate-400">
+                    Regular Hours ({isDailyOvertimeMode ? '≤8/day, ' : ''}
+                    {isWeeklyOvertimeMode ? '≤40/wk' : '≤40/period'})
+                  </div>
+                  <div className="text-lg print:text-sm font-black font-mono text-gray-900 dark:text-white mt-0.5">
+                    {regularPeriodHours.toFixed(2)} <span className="text-xs print:text-[10px] font-semibold text-gray-400">hrs</span>
+                  </div>
+                </div>
+
+                <div
+                  className={`p-3 print:p-2 rounded-xl border ${
+                    isOvertimePeriod
+                      ? 'border-rose-300 dark:border-rose-700 bg-rose-50/70 dark:bg-rose-950/40'
+                      : 'border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-900/60'
+                  }`}
+                >
+                  <div
+                    className={`text-[11px] print:text-[9px] font-bold uppercase tracking-wider flex items-center gap-1 ${
+                      isOvertimePeriod
+                        ? 'text-rose-700 dark:text-rose-300'
+                        : 'text-gray-500 dark:text-slate-400'
+                    }`}
+                  >
+                    {isOvertimePeriod && <AlertTriangle className="w-3 h-3 text-rose-600 dark:text-rose-400 shrink-0" />}
+                    <span>
+                      Overtime ({isDailyOvertimeMode ? '>8/day, ' : ''}
+                      {isWeeklyOvertimeMode ? '>40/wk' : '>40/period'})
+                    </span>
+                  </div>
+                  <div
+                    className={`text-lg print:text-sm font-black font-mono mt-0.5 ${
+                      isOvertimePeriod
+                        ? 'text-rose-600 dark:text-rose-400'
+                        : 'text-gray-400 dark:text-slate-500'
+                    }`}
+                  >
+                    {isOvertimePeriod ? `+${overtimePeriodHours.toFixed(2)}` : '0.00'}{' '}
+                    <span className="text-xs print:text-[10px] font-semibold">hrs</span>
+                  </div>
+                </div>
+              </div>
+
+              <p className="text-xs print:text-[10px] text-gray-500 dark:text-slate-400 leading-relaxed print:leading-snug break-words whitespace-normal max-w-full">
+                Total hours are automatically calculated based on
+                <br className="hidden print:inline" /> Time In, Time Out, and Lunch deduction.
               </p>
 
               {sentLogs.length > 0 && (
-                <div className="pt-3 border-t border-gray-100 dark:border-slate-700 text-xs text-emerald-700 dark:text-emerald-400 flex items-center gap-1.5">
-                  <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                <div className="pt-3 print:pt-1.5 border-t border-gray-100 dark:border-slate-700 text-xs print:text-[10px] text-emerald-700 dark:text-emerald-400 flex items-center gap-1.5">
+                  <CheckCircle2 className="w-4 h-4 print:w-3 print:h-3 text-emerald-600" />
                   <span>Last sent: {new Date(sentLogs[sentLogs.length - 1].date).toLocaleString()}</span>
                 </div>
               )}
@@ -2197,20 +3328,48 @@ export default function App() {
             ========================================================================= */}
         <div className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border-t border-gray-200 dark:border-slate-800 px-4 py-3 shadow-[0_-4px_20px_rgba(0,0,0,0.08)] pb-[calc(0.75rem+env(safe-area-inset-bottom,0px))] flex items-center justify-between gap-3">
           <div className="flex flex-col">
-            <span className="text-[11px] font-bold uppercase tracking-wider text-gray-500 dark:text-slate-400">
-              Total Hours
-            </span>
-            <span className="text-xl font-black text-indigo-600 dark:text-indigo-400 font-mono leading-tight">
-              {totalHours || '0.00'} <span className="text-xs text-gray-400">hrs</span>
+            <div className="flex items-center gap-1.5">
+              <span className="text-[11px] font-bold uppercase tracking-wider text-gray-500 dark:text-slate-400">
+                Total Hours
+              </span>
+              {isOvertimePeriod && (
+                <span className="px-1.5 py-0.2 rounded bg-rose-100 dark:bg-rose-950/80 text-rose-700 dark:text-rose-300 border border-rose-300 dark:border-rose-800 text-[10px] font-extrabold uppercase">
+                  +{overtimePeriodHours.toFixed(2)} OT
+                </span>
+              )}
+            </div>
+            <span
+              className={`text-xl font-black font-mono leading-tight ${
+                isOvertimePeriod
+                  ? 'text-rose-600 dark:text-rose-400'
+                  : 'text-indigo-600 dark:text-indigo-400'
+              }`}
+            >
+              {totalHours || '0.00'}{' '}
+              <span className={`text-xs ${isOvertimePeriod ? 'text-rose-500' : 'text-gray-400'}`}>
+                hrs
+              </span>
             </span>
           </div>
 
           <div className="flex items-center gap-2 flex-1 justify-end">
             <button
+              onClick={handleExportPDF}
+              disabled={isGeneratingPDF}
+              className="min-h-[44px] min-w-[44px] px-3 py-2 text-sm font-bold text-gray-700 dark:text-slate-200 bg-gray-100 dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-xl flex items-center gap-1.5 active:scale-95 disabled:opacity-60"
+              aria-label="Export PDF timesheet"
+              title="Download PDF"
+            >
+              {isGeneratingPDF ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+              <span className="hidden sm:inline">PDF</span>
+            </button>
+
+            <button
               onClick={handlePrint}
               disabled={isGeneratingPDF}
-              className="min-h-[44px] min-w-[44px] px-3.5 py-2 text-sm font-bold text-gray-700 dark:text-slate-200 bg-gray-100 dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-xl flex items-center gap-1.5 active:scale-95 disabled:opacity-60"
+              className="min-h-[44px] min-w-[44px] px-3 py-2 text-sm font-bold text-gray-700 dark:text-slate-200 bg-gray-100 dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-xl flex items-center gap-1.5 active:scale-95 disabled:opacity-60"
               aria-label="Print timesheet"
+              title="Print"
             >
               {isGeneratingPDF ? <Loader2 className="w-4 h-4 animate-spin" /> : <Printer className="w-4 h-4" />}
               <span className="hidden sm:inline">Print</span>
@@ -2314,6 +3473,407 @@ export default function App() {
                   <option value="Weekly">Weekly (7 Days)</option>
                   <option value="Monthly">Monthly</option>
                 </select>
+
+                {/* Calculate Overtime Weekly Toggle */}
+                <label className="mt-3 p-3.5 rounded-2xl bg-indigo-50/70 dark:bg-indigo-950/30 border border-indigo-200/80 dark:border-indigo-800/60 flex items-start justify-between gap-3 cursor-pointer">
+                  <div>
+                    <span className="text-xs font-bold uppercase tracking-wider text-indigo-950 dark:text-indigo-200 block">
+                      Calculate Overtime Weekly
+                    </span>
+                    <span className="text-[11px] text-indigo-800/80 dark:text-indigo-300/80 mt-0.5 block leading-snug">
+                      {shiftSettings.calculateOvertimeWeekly !== false
+                        ? 'Weekly mode (default): Overtime (>40 hrs) is calculated for each 7-day workweek and reflected in Payroll Summary.'
+                        : 'Per-period mode: Overtime (>40 hrs) is calculated across the entire pay period total.'}
+                    </span>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={shiftSettings.calculateOvertimeWeekly !== false}
+                    onChange={e => {
+                      const checked = e.target.checked;
+                      const next = { ...shiftSettings, calculateOvertimeWeekly: checked };
+                      setShiftSettings(next);
+                      localStorage.setItem('shift_settings', JSON.stringify(next));
+                      syncOvertimeCalculationMode(checked);
+                    }}
+                    className="w-5 h-5 mt-0.5 rounded text-indigo-600 focus:ring-indigo-500 shrink-0"
+                  />
+                </label>
+
+                {/* Calculate Daily Overtime (>8 hrs/day) Toggle */}
+                <label className="mt-2.5 p-3.5 rounded-2xl bg-rose-50/70 dark:bg-rose-950/30 border border-rose-200/80 dark:border-rose-800/60 flex items-start justify-between gap-3 cursor-pointer">
+                  <div>
+                    <span className="text-xs font-bold uppercase tracking-wider text-rose-950 dark:text-rose-200 block">
+                      Calculate Daily Overtime (&gt;8 hrs/day)
+                    </span>
+                    <span className="text-[11px] text-rose-800/80 dark:text-rose-300/80 mt-0.5 block leading-snug">
+                      {shiftSettings.calculateDailyOvertime
+                        ? 'Daily overtime enabled: Any hours worked beyond 8 hours in a single day are automatically counted as Overtime.'
+                        : 'Off: Daily hours over 8 count toward Regular Hours up to the 40-hour threshold.'}
+                    </span>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={Boolean(shiftSettings.calculateDailyOvertime)}
+                    onChange={e => {
+                      const checked = e.target.checked;
+                      const next = { ...shiftSettings, calculateDailyOvertime: checked };
+                      setShiftSettings(next);
+                      localStorage.setItem('shift_settings', JSON.stringify(next));
+                      syncDailyOvertimeMode(checked);
+                    }}
+                    className="w-5 h-5 mt-0.5 rounded text-rose-600 focus:ring-rose-500 shrink-0"
+                  />
+                </label>
+              </div>
+
+              {/* Automatic Default Lunch Break (> 6 hrs with no lunch recorded) */}
+              <div className="p-4 rounded-2xl bg-amber-50/70 dark:bg-amber-950/30 border border-amber-200/80 dark:border-amber-800/60 space-y-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <h4 className="text-xs font-bold uppercase tracking-wider text-amber-900 dark:text-amber-200 flex items-center gap-1.5">
+                      <Utensils className="w-3.5 h-3.5 text-amber-700 dark:text-amber-400" />
+                      <span>Auto Default Lunch Break</span>
+                    </h4>
+                    <p className="text-[11px] text-amber-800/80 dark:text-amber-300/80 mt-0.5 leading-snug">
+                      Automatically apply a default lunch break to any shift longer than{' '}
+                      <strong>{shiftSettings.autoLunchMinShiftHours || 6} hours</strong> that has no lunch recorded.
+                    </p>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={Boolean(shiftSettings.autoLunchEnabled)}
+                    onChange={e => {
+                      const next = { ...shiftSettings, autoLunchEnabled: e.target.checked };
+                      setShiftSettings(next);
+                      localStorage.setItem('shift_settings', JSON.stringify(next));
+                    }}
+                    className="w-5 h-5 mt-0.5 rounded text-indigo-600 focus:ring-indigo-500 shrink-0"
+                  />
+                </div>
+
+                <div
+                  className={`space-y-3 ${
+                    shiftSettings.autoLunchEnabled ? '' : 'opacity-50 pointer-events-none'
+                  }`}
+                >
+                  <div>
+                    <label className="block text-xs font-semibold text-amber-900 dark:text-amber-200 mb-1.5">
+                      Default Lunch Duration
+                    </label>
+                    <div className="grid grid-cols-4 gap-2">
+                      {[15, 30, 45, 60].map(mins => {
+                        const isSelected = (Number(shiftSettings.autoLunchDurationMins) || 30) === mins;
+                        return (
+                          <button
+                            key={mins}
+                            type="button"
+                            onClick={() => {
+                              const next = { ...shiftSettings, autoLunchDurationMins: mins };
+                              setShiftSettings(next);
+                              localStorage.setItem('shift_settings', JSON.stringify(next));
+                            }}
+                            className={`min-h-[38px] px-2 py-1.5 rounded-xl text-xs font-bold border transition-all ${
+                              isSelected
+                                ? 'bg-amber-600 text-white border-amber-600 shadow-xs'
+                                : 'bg-white dark:bg-slate-800 text-gray-800 dark:text-slate-200 border-amber-200 dark:border-slate-700 hover:bg-amber-100/60'
+                            }`}
+                          >
+                            {mins} mins
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between gap-3">
+                    <label className="text-xs font-semibold text-amber-900 dark:text-amber-200">
+                      Minimum Shift Length (hrs)
+                    </label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={16}
+                      step={0.5}
+                      value={shiftSettings.autoLunchMinShiftHours ?? 6}
+                      onChange={e => {
+                        const val = Math.max(1, parseFloat(e.target.value) || 6);
+                        const next = { ...shiftSettings, autoLunchMinShiftHours: val };
+                        setShiftSettings(next);
+                        localStorage.setItem('shift_settings', JSON.stringify(next));
+                      }}
+                      className="w-20 min-h-[36px] px-2.5 py-1 text-xs font-bold text-center border border-amber-300 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 text-gray-900 dark:text-white"
+                    />
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const filled = populateDefaultLunchCells();
+                      if (filled > 0) {
+                        showNotice(
+                          'success',
+                          `Filled ${shiftSettings.autoLunchDurationMins || 30}-min lunch break times on ${filled} shift${filled > 1 ? 's' : ''} (> ${shiftSettings.autoLunchMinShiftHours || 6}h).`
+                        );
+                      } else {
+                        showNotice(
+                          'success',
+                          `Auto ${shiftSettings.autoLunchDurationMins || 30}-min lunch deduction is active for all shifts > ${shiftSettings.autoLunchMinShiftHours || 6}h without recorded lunch.`
+                        );
+                      }
+                    }}
+                    className="w-full min-h-[38px] px-3 py-1.5 text-xs font-bold text-amber-950 bg-[#FEF9C3] hover:bg-amber-200/80 border border-amber-300 rounded-xl transition-colors flex items-center justify-center gap-1.5"
+                  >
+                    <Utensils className="w-3.5 h-3.5" />
+                    <span>
+                      Fill {shiftSettings.autoLunchDurationMins || 30}-Min Lunch Cells on Shifts &gt;{' '}
+                      {shiftSettings.autoLunchMinShiftHours || 6}h
+                    </span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Excessive Break Duration Alert (> 120 mins single day) */}
+              <div className="p-4 rounded-2xl bg-rose-50/70 dark:bg-rose-950/30 border border-rose-200/80 dark:border-rose-800/60 space-y-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <h4 className="text-xs font-bold uppercase tracking-wider text-rose-900 dark:text-rose-200 flex items-center gap-1.5">
+                      <AlertTriangle className="w-3.5 h-3.5 text-rose-600 dark:text-rose-400" />
+                      <span>Excessive Break Alert (&gt;{shiftSettings.maxBreakMinutes || 120} mins)</span>
+                    </h4>
+                    <p className="text-[11px] text-rose-800/80 dark:text-rose-300/80 mt-0.5 leading-snug">
+                      Alert if total break time for a single day exceeds{' '}
+                      <strong>{shiftSettings.maxBreakMinutes || 120} minutes</strong> to prevent common data entry or AM/PM errors.
+                    </p>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={shiftSettings.excessiveBreakAlertEnabled !== false}
+                    onChange={e => {
+                      const next = {
+                        ...shiftSettings,
+                        excessiveBreakAlertEnabled: e.target.checked,
+                      };
+                      setShiftSettings(next);
+                      localStorage.setItem('shift_settings', JSON.stringify(next));
+                    }}
+                    className="w-5 h-5 mt-0.5 rounded text-indigo-600 focus:ring-indigo-500 shrink-0"
+                  />
+                </div>
+
+                <div
+                  className={`space-y-2.5 ${
+                    shiftSettings.excessiveBreakAlertEnabled !== false
+                      ? ''
+                      : 'opacity-50 pointer-events-none'
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <label className="text-xs font-semibold text-rose-900 dark:text-rose-200">
+                      Max Daily Break Limit (mins)
+                    </label>
+                    <input
+                      type="number"
+                      min={15}
+                      max={480}
+                      step={15}
+                      value={shiftSettings.maxBreakMinutes ?? 120}
+                      onChange={e => {
+                        const val = Math.max(15, parseInt(e.target.value, 10) || 120);
+                        const next = { ...shiftSettings, maxBreakMinutes: val };
+                        setShiftSettings(next);
+                        localStorage.setItem('shift_settings', JSON.stringify(next));
+                      }}
+                      className="w-24 min-h-[36px] px-2.5 py-1 text-xs font-bold text-center border border-rose-300 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 text-gray-900 dark:text-white"
+                    />
+                  </div>
+
+                    <div className="grid grid-cols-4 gap-2">
+                    {[60, 90, 120, 180].map(mins => {
+                      const isSelected = (Number(shiftSettings.maxBreakMinutes) || 120) === mins;
+                      return (
+                        <button
+                          key={mins}
+                          type="button"
+                          onClick={() => {
+                            const next = { ...shiftSettings, maxBreakMinutes: mins };
+                            setShiftSettings(next);
+                            localStorage.setItem('shift_settings', JSON.stringify(next));
+                          }}
+                          className={`min-h-[36px] px-2 py-1 rounded-xl text-xs font-bold border transition-all ${
+                            isSelected
+                              ? 'bg-rose-600 text-white border-rose-600 shadow-xs'
+                              : 'bg-white dark:bg-slate-800 text-gray-800 dark:text-slate-200 border-rose-200 dark:border-slate-700 hover:bg-rose-100/60'
+                          }`}
+                        >
+                          {mins}m
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+
+              {/* Public Holidays Highlighting & Local Holiday Sync */}
+              <div className="p-4 rounded-2xl bg-violet-50/70 dark:bg-violet-950/30 border border-violet-200/80 dark:border-violet-800/60 space-y-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <h4 className="text-xs font-bold uppercase tracking-wider text-violet-900 dark:text-violet-200 flex items-center gap-1.5">
+                      <Calendar className="w-3.5 h-3.5 text-violet-600 dark:text-violet-400" />
+                      <span>Highlight Public Holidays</span>
+                    </h4>
+                    <p className="text-[11px] text-violet-800/80 dark:text-violet-300/80 mt-0.5 leading-snug">
+                      Automatically highlight and mark official public holidays and custom company dates in the timesheet view.
+                    </p>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={shiftSettings.highlightPublicHolidays !== false}
+                    onChange={e => {
+                      const checked = e.target.checked;
+                      const next = { ...shiftSettings, highlightPublicHolidays: checked };
+                      setShiftSettings(next);
+                      localStorage.setItem('shift_settings', JSON.stringify(next));
+                      syncPublicHolidaySettings(checked, holidayCountry);
+                    }}
+                    className="w-5 h-5 mt-0.5 rounded text-violet-600 focus:ring-violet-500 shrink-0"
+                  />
+                </div>
+
+                <div
+                  className={`space-y-3 ${
+                    shiftSettings.highlightPublicHolidays !== false
+                      ? ''
+                      : 'opacity-50 pointer-events-none'
+                  }`}
+                >
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="text-xs font-semibold text-violet-900 dark:text-violet-200">
+                        Region / Holiday Calendar
+                      </label>
+                      <span className="text-[10px] font-bold text-violet-700 dark:text-violet-300">
+                        {isSyncingHolidays
+                          ? 'Syncing holidays...'
+                          : holidaySyncSource === 'api'
+                          ? 'Live API + Predefined active'
+                          : 'Predefined calendar active'}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <select
+                        value={holidayCountry}
+                        onChange={e => {
+                          const newCountry = e.target.value as HolidayCountryCode;
+                          const next = { ...shiftSettings, holidayCountry: newCountry };
+                          setShiftSettings(next);
+                          localStorage.setItem('shift_settings', JSON.stringify(next));
+                          syncPublicHolidaySettings(
+                            shiftSettings.highlightPublicHolidays !== false,
+                            newCountry
+                          );
+                          syncHolidaysFromApi(newCountry, true);
+                        }}
+                        className="flex-1 min-h-[38px] px-2.5 py-1.5 text-xs font-bold border border-violet-300 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-gray-900 dark:text-white"
+                      >
+                        {SUPPORTED_HOLIDAY_COUNTRIES.map(c => (
+                          <option key={c.code} value={c.code}>
+                            {c.name}
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        type="button"
+                        disabled={isSyncingHolidays}
+                        onClick={() => syncHolidaysFromApi(holidayCountry, true)}
+                        className="min-h-[38px] px-3 py-1.5 text-xs font-bold text-violet-800 dark:text-violet-200 bg-violet-100 hover:bg-violet-200/80 dark:bg-violet-900/60 border border-violet-300 dark:border-violet-700 rounded-xl transition-colors whitespace-nowrap"
+                        title="Fetch latest local public holidays from Nager.Date Public Holiday API"
+                      >
+                        {isSyncingHolidays ? 'Syncing...' : 'Sync API'}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Holidays in current pay period */}
+                  {periodHolidays.length > 0 && (
+                    <div className="p-2.5 rounded-xl bg-white/80 dark:bg-slate-800/80 border border-violet-200 dark:border-slate-700 space-y-1">
+                      <span className="text-[10px] font-extrabold uppercase tracking-wider text-violet-700 dark:text-violet-300 block">
+                        Holidays in Current Period ({periodHolidays.length})
+                      </span>
+                      <div className="flex flex-wrap gap-1.5">
+                        {periodHolidays.map(({ holiday: h }) => (
+                          <span
+                            key={h.date}
+                            className="inline-flex items-center gap-1 text-[11px] font-bold bg-violet-100 dark:bg-violet-950 text-violet-900 dark:text-violet-200 px-2 py-0.5 rounded-md border border-violet-200 dark:border-violet-800"
+                          >
+                            <span className="font-mono">{h.date.slice(5)}:</span>
+                            <span>{h.name}</span>
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Add Custom Company / Local Holiday */}
+                  <div className="pt-2 border-t border-violet-200/70 dark:border-violet-800/50 space-y-2">
+                    <label className="block text-[11px] font-bold text-violet-900 dark:text-violet-200">
+                      Add Custom Holiday Date
+                    </label>
+                    <div className="grid grid-cols-1 sm:grid-cols-12 gap-2">
+                      <input
+                        type="date"
+                        value={newCustomHolidayDate}
+                        onChange={e => setNewCustomHolidayDate(e.target.value)}
+                        className="sm:col-span-5 min-h-[36px] px-2.5 py-1 text-xs font-semibold border border-violet-300 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 text-gray-900 dark:text-white"
+                      />
+                      <input
+                        type="text"
+                        value={newCustomHolidayName}
+                        onChange={e => setNewCustomHolidayName(e.target.value)}
+                        placeholder="Holiday name (e.g., Founder's Day)"
+                        className="sm:col-span-5 min-h-[36px] px-2.5 py-1 text-xs font-medium border border-violet-300 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 text-gray-900 dark:text-white"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (!newCustomHolidayDate || !newCustomHolidayName.trim()) return;
+                          const updated = addCustomHoliday(
+                            newCustomHolidayDate,
+                            newCustomHolidayName
+                          );
+                          setCustomHolidays(updated);
+                          setNewCustomHolidayDate('');
+                          setNewCustomHolidayName('');
+                        }}
+                        className="sm:col-span-2 min-h-[36px] px-2.5 py-1 text-xs font-bold text-white bg-violet-600 hover:bg-violet-700 rounded-lg transition-colors"
+                      >
+                        Add
+                      </button>
+                    </div>
+
+                    {customHolidays.length > 0 && (
+                      <div className="flex flex-wrap gap-1.5 pt-1">
+                        {customHolidays.map(ch => (
+                          <span
+                            key={ch.date}
+                            className="inline-flex items-center gap-1 text-[11px] font-semibold bg-white dark:bg-slate-800 text-violet-900 dark:text-violet-200 px-2 py-0.5 rounded-lg border border-violet-300 dark:border-slate-700"
+                          >
+                            <span className="font-mono font-bold">{ch.date}</span>
+                            <span>{ch.name}</span>
+                            <button
+                              type="button"
+                              onClick={() => setCustomHolidays(removeCustomHoliday(ch.date))}
+                              className="text-violet-500 hover:text-rose-600 ml-0.5"
+                              title="Remove custom holiday"
+                            >
+                              <X className="w-3 h-3" />
+                            </button>
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
               </div>
 
               {/* Shift Notifications & Times */}
@@ -2489,6 +4049,95 @@ export default function App() {
                 className="min-h-[44px] px-5 py-2 text-sm font-bold text-white bg-rose-600 hover:bg-rose-700 rounded-xl shadow-sm"
               >
                 Clear All
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* =========================================================================
+          CONFIRM COPY PREVIOUS DAY MODAL (MOBILE WARNING)
+          ========================================================================= */}
+      {copyConfirmDayIndex !== null && copyConfirmDayIndex > 0 && records[copyConfirmDayIndex] && (
+        <div
+          className="fixed inset-0 bg-black/50 dark:bg-slate-950/80 backdrop-blur-sm flex items-center justify-center z-50 p-4"
+          onClick={() => setCopyConfirmDayIndex(null)}
+        >
+          <div
+            className="bg-white dark:bg-slate-900 rounded-3xl shadow-2xl max-w-sm w-full p-6 border border-gray-200 dark:border-slate-800"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="w-12 h-12 bg-amber-100 dark:bg-amber-950/60 rounded-2xl flex items-center justify-center text-amber-600 dark:text-amber-400 mb-4">
+              <AlertTriangle className="w-6 h-6" />
+            </div>
+            <h3 className="text-lg font-bold text-gray-900 dark:text-white">
+              Copy Previous Day&apos;s Hours?
+            </h3>
+            <p className="text-sm text-gray-600 dark:text-slate-300 mt-2">
+              This will copy the time entries from{' '}
+              <strong className="text-gray-900 dark:text-white">
+                {records[copyConfirmDayIndex - 1].day}
+              </strong>{' '}
+              into{' '}
+              <strong className="text-gray-900 dark:text-white">
+                {records[copyConfirmDayIndex].day}
+              </strong>{' '}
+              and overwrite any hours currently entered for {records[copyConfirmDayIndex].day}.
+            </p>
+
+            <div className="mt-4 p-3 rounded-2xl bg-gray-50 dark:bg-slate-800/70 border border-gray-200 dark:border-slate-700 text-xs space-y-1.5">
+              <div className="font-bold text-gray-700 dark:text-slate-200 uppercase tracking-wider text-[11px]">
+                {records[copyConfirmDayIndex - 1].day} Schedule to Copy:
+              </div>
+              <div className="grid grid-cols-2 gap-2 text-gray-600 dark:text-slate-300 pt-0.5">
+                <div>
+                  Time In:{' '}
+                  <strong className="font-mono text-gray-900 dark:text-white">
+                    {records[copyConfirmDayIndex - 1].timeIn || '—'}
+                  </strong>
+                </div>
+                <div>
+                  Time Out:{' '}
+                  <strong className="font-mono text-gray-900 dark:text-white">
+                    {records[copyConfirmDayIndex - 1].timeOut || '—'}
+                  </strong>
+                </div>
+                <div>
+                  Lunch:{' '}
+                  <strong className="font-mono text-gray-900 dark:text-white">
+                    {records[copyConfirmDayIndex - 1].lunchStart &&
+                    records[copyConfirmDayIndex - 1].lunchEnd
+                      ? `${records[copyConfirmDayIndex - 1].lunchStart}–${records[copyConfirmDayIndex - 1].lunchEnd}`
+                      : 'None'}
+                  </strong>
+                </div>
+                <div>
+                  Total:{' '}
+                  <strong className="font-mono text-indigo-600 dark:text-indigo-400">
+                    {records[copyConfirmDayIndex - 1].totalHours} hrs
+                  </strong>
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-6 flex items-center justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setCopyConfirmDayIndex(null)}
+                className="min-h-[44px] px-4 py-2 text-sm font-bold text-gray-700 dark:text-slate-300 bg-gray-100 dark:bg-slate-800 rounded-xl"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  copyPreviousDay(copyConfirmDayIndex);
+                  setCopyConfirmDayIndex(null);
+                }}
+                className="min-h-[44px] px-5 py-2 text-sm font-bold text-white bg-amber-600 hover:bg-amber-700 rounded-xl shadow-sm flex items-center gap-1.5"
+              >
+                <Copy className="w-4 h-4" />
+                <span>Yes, Copy</span>
               </button>
             </div>
           </div>
@@ -2798,3 +4447,147 @@ export default function App() {
     </main>
   );
 }
+
+export default function App() {
+  const [route, setRoute] = useState<string>(() => {
+    if (typeof window !== 'undefined') {
+      return window.location.pathname || '/';
+    }
+    return '/';
+  });
+
+  const [session, setSession] = useState<{ user: AppUser; company: Company } | null>(() =>
+    getCurrentSessionUser()
+  );
+
+  useEffect(() => {
+    const handlePopState = () => {
+      setRoute(window.location.pathname || '/');
+      setSession(getCurrentSessionUser());
+    };
+    const handleStoreUpdate = () => {
+      setSession(getCurrentSessionUser());
+    };
+    window.addEventListener('popstate', handlePopState);
+    window.addEventListener('tsm-store-updated', handleStoreUpdate);
+    return () => {
+      window.removeEventListener('popstate', handlePopState);
+      window.removeEventListener('tsm-store-updated', handleStoreUpdate);
+    };
+  }, []);
+
+  const navigate = useCallback((path: string) => {
+    if (typeof window !== 'undefined' && window.location.pathname !== path) {
+      window.history.pushState({}, '', path);
+    }
+    setRoute(path);
+    setSession(getCurrentSessionUser());
+    window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
+  }, []);
+
+  const currentSession = session || getCurrentSessionUser();
+
+  if (route.startsWith('/auth')) {
+    return (
+      <AuthScreen
+        onNavigate={navigate}
+        onAuthenticated={(u, c) => setSession({ user: u, company: c })}
+      />
+    );
+  }
+
+  if (route.startsWith('/clock')) {
+    if (!currentSession) {
+      return (
+        <AuthScreen
+          onNavigate={navigate}
+          onAuthenticated={(u, c) => {
+            setSession({ user: u, company: c });
+            navigate('/clock');
+          }}
+        />
+      );
+    }
+    return (
+      <PunchClockScreen
+        user={currentSession.user}
+        company={currentSession.company}
+        onNavigate={navigate}
+        onSignOut={() => {
+          setSession(null);
+          navigate('/auth');
+        }}
+      />
+    );
+  }
+
+  if (route.startsWith('/my-hours')) {
+    if (!currentSession) {
+      return (
+        <AuthScreen
+          onNavigate={navigate}
+          onAuthenticated={(u, c) => {
+            setSession({ user: u, company: c });
+            navigate('/my-hours');
+          }}
+        />
+      );
+    }
+    return (
+      <MyHoursScreen
+        user={currentSession.user}
+        company={currentSession.company}
+        onNavigate={navigate}
+        onSignOut={() => {
+          setSession(null);
+          navigate('/auth');
+        }}
+      />
+    );
+  }
+
+  if (route.startsWith('/admin')) {
+    if (!currentSession) {
+      return (
+        <AuthScreen
+          onNavigate={navigate}
+          onAuthenticated={(u, c) => {
+            setSession({ user: u, company: c });
+            if (u.role === 'Admin' || u.role === 'Manager') {
+              navigate('/admin');
+            } else {
+              navigate('/my-hours');
+            }
+          }}
+        />
+      );
+    }
+    if (currentSession.user.role === 'Employee') {
+      return (
+        <MyHoursScreen
+          user={currentSession.user}
+          company={currentSession.company}
+          onNavigate={navigate}
+          onSignOut={() => {
+            setSession(null);
+            navigate('/auth');
+          }}
+        />
+      );
+    }
+    return (
+      <AdminConsole
+        user={currentSession.user}
+        company={currentSession.company}
+        onNavigate={navigate}
+        onSignOut={() => {
+          setSession(null);
+          navigate('/auth');
+        }}
+      />
+    );
+  }
+
+  return <LandingTimesheet onOpenBusinessLogin={() => navigate('/auth')} />;
+}
+

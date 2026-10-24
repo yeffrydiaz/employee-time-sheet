@@ -1,0 +1,173 @@
+Employee Time Sheet web app in React + Vite + Tailwind CSS, extended into a multi-user time clock system.
+For Google AI Studio Build. If I attach existing source code, use it as the base and change only what this prompt describes. Otherwise rebuild the existing app from the PRESERVED LANDING spec below first, then add the new system on top of it.
+APP TO BUILD:
+"Time Sheet Manager" — Phase 1 Hybrid: the existing single-page employee timesheet stays as the public landing page, unchanged in design and behavior, AND a complete back-office system is added behind a Business Login: business owner signup, Admin / Manager / Employee accounts, employee roster, departments, company settings, a web punch clock, admin time-record views, approvals, email notifications, and basic reports. Modeled on OpenTimeClock's core admin functionality, scoped to Phase 1 only (see OUT OF SCOPE at the end — do not half-build later phases).
+================
+PART A — PRESERVED LANDING PAGE (DO NOT REDESIGN)
+================
+The landing page at route "/" is the existing Time Sheet Manager sheet. Preserve it exactly as it exists today. This is a hard rule, not a preference: do not restyle it, do not move its controls, do not "modernize" it.
+A1. Header, left to right: "Time Sheet Manager" title; company switcher showing "Royal Transportation" with a Select Company menu and "Add company..." field; auto-save indicator "Last saved [time]" with a "Changes saved" toast (auto-save to local storage, no Save button); Manager's Email(s) field pre-filled TIMESHEETS@ROYAL-TRANS.COM; Print button; Send button; Settings gear button ALL THE WAY TO THE FAR RIGHT of the header.
+A2. The ONLY header change allowed in Phase 1: the existing "Login / Sign Up" button (caption: "Login adds sync + history. Sheet works without it.") is renamed to "Business Login" and now opens the new Auth screen (Part C). Nothing else in the header changes, moves, or is added.
+A3. Main form: company name heading ("Royal Transportation"), sub-line "EMPLOYEE TIME SHEET • BI-WEEKLY PERIOD"; "Clock In (Now)" button; fields EMPLOYEE NAME, YOUR EMAIL (FOR CC), PERIOD STARTING (date picker) with the period summary (e.g. "Oct 11 – 24, 2026").
+A4. Per-day grid, columns exactly: DATE | TIME IN | LUNCH START | LUNCH END | TIME OUT | TOTAL HRS | NOTES. One row per day of the period (14 by default). Each time cell is a 12-hour time input with a time picker and a "Now" quick-fill button. Each date cell after the first has a "Copy prev" link that copies the previous day's times. The current day's row is marked TODAY. TOTAL HRS is auto-calculated as (Time Out − Time In) − lunch duration. Notes placeholder: "e.g., Overtime".
+A5. Design rules for the sheet that must survive untouched:
+Time and total-hours fonts AS LARGE AS FITS in their cells.
+Soft yellow background #FEF9C3 on the Lunch Start and Lunch End cells ONLY. TIME IN, TIME OUT, and every other cell/field stay pure white, no yellow tint anywhere else.
+Lunch Start/End time font slightly smaller than Time In/Out, with a small lunch icon distinguishing them; on desktop, Lunch Start/End font a little smaller still.
+The light/dark theme switch lives ONLY inside the Settings modal. No theme button in the header.
+Keep both the clean look of the current sheet; do not add cards, banners, sidebars, or marketing sections to this page.
+A6. Settings modal on the landing page stays a personal, per-device modal with EXACTLY its current contents, nothing removed and nothing added: Appearance (Theme: Light Mode with Switch button); Timesheet Period (Bi-weekly (14 Days - Default) / Weekly (7 Days) / Monthly); Shift Notifications (enabled checkbox; Start Time 09:00 AM, End Time 05:00 PM, Lunch Start 12:00 PM, Lunch End 01:00 PM); Data & History (View Timesheet History, Clear Timesheet Data, Done).
+ANTI-PATTERN, counts as not done: putting Business signup, Business Login, company/admin settings, or any admin link inside this Settings modal. Admin is reached ONLY through the Business Login button in the header.
+A7. Below the grid, unchanged: EMPLOYEE SIGNATURE (Draw canvas with Undo/Redo/Clear Signature, or Type Name mode, plus SIGNATURE DATE), and the TOTAL PERIOD HOURS card ("Total hours are automatically calculated based on Time In, Time Out, and Lunch deduction.").
+A8. Timesheet History modal unchanged: search box, saved periods with total hours, restore/open and delete per entry.
+A9. Guest behavior unchanged: the sheet works fully with no login, saves locally, and Send/Print work as they do today. Logging in must never be required to use the landing sheet, and logging in must never delete or overwrite the guest sheet's local data.
+================
+PART B — ARCHITECTURE, ROUTES, ACCOUNTS
+================
+B1. Routes:
+"/" — Preserved landing sheet (Part A). Public, works logged-out.
+"/auth" — Auth screen (Part C): Sign In tab and Create Business Account tab.
+"/clock" — Web Punch Clock (Part G), for logged-in employees.
+"/my-hours" — Logged-in employee view (Part H): the same sheet design as the landing page, bound to real records.
+"/admin" — Admin Console shell (Part D) with sub-views: Dashboard, Time Records (List View / Day View), Approvals, Users, Departments, Reports, Company Settings, Notifications. Managers see the same console minus Users-delete, Company Settings billing-type fields, and any control their permissions turn off (Part F).
+B2. Accounts and signup:
+A business owner signs up from "/auth → Create Business Account" with: Company Name, Owner Full Name, Owner Email, Password, Company Timezone. Submitting creates a new Company, an Admin user for the owner, default Company Settings (Part E), and signs the owner straight into "/admin".
+Employees and Managers do NOT self-sign-up in Phase 1. An Admin creates their accounts in Users (Part D4); they sign in with the username/password the Admin set.
+Sign In accepts Username or Email + Password, with a "Remember me" checkbox. Wrong credentials show a plain error ("Invalid username or password") — never raw JSON or a stack trace.
+Signing in from the landing page's Business Login goes to "/admin" for Admin/Manager and to "/my-hours" for Employee.
+Every record belongs to exactly one Company. Users of one company must never see another company's people, records, or reports. Keep the landing page's company switcher for the guest sheet only; inside the console, the company is the signed-in user's company.
+B3. Data layer: implement all new data through a single clean data-service layer (functions like getUsers, createTimeEntry, approveRecord…) over the app's persistence (existing backend/local state if the attached source has one; otherwise a well-structured local store with the same function signatures), so a real server database can replace the store later without touching screens. Seed the demo data in Part K so every screen can be tested immediately.
+B4. Roles: Admin, Manager, Employee, Inactive. Inactive accounts cannot sign in and cannot clock in, but their past records remain visible.
+================
+PART C — AUTH SCREEN ("/auth")
+================
+C1. Clean centered card on a plain background (this is a NEW screen; it does not reuse the sheet design and must not look like the landing page). Title "Time Sheet Manager", subtitle "Business Login".
+C2. Two tabs: "Sign In" | "Create Business Account".
+C3. Sign In tab: Username or Email field, Password field (show/hide eye), Remember me checkbox, "Sign In" primary button, small text under it: "Employees: your account is created by your manager."
+C4. Create Business Account tab: Company Name, Your Full Name, Email, Password, Confirm Password, Company Timezone (select, default America/New_York), "Create Business Account" primary button, small text: "Creates your company and your Admin account. You can add employees next."
+C5. Validation: required fields marked, mismatched passwords and duplicate company-owner email show inline plain-language errors.
+C6. A "← Back to timesheet" link returns to "/" without signing in.
+================
+PART D — ADMIN CONSOLE ("/admin")
+================
+D0. Console shell (NEW design, admin-only — the landing design rules in Part A do NOT apply here, but keep it clean and consistent):
+Left sidebar navigation, in this order: Dashboard, Time Records, Approvals (with a live badge showing the pending count), Users, Departments, Reports, Company Settings, Notifications.
+Top bar: company name, a global employee search box, the signed-in user's name + role, and "Exit to Timesheet" (goes to "/") and "Sign Out" buttons.
+Main area swaps views without a full page reload. On mobile the sidebar collapses to a top hamburger menu.
+No control, banner, or badge may overlap the main content area.
+D1. Dashboard (console home):
+Stat cards for TODAY: Employees clocked in now, Employees clocked out, No entry yet, Pending approvals.
+Stat cards for CURRENT PAY PERIOD: Total paid hours, Total records, Employees with no entry in the period ("Who has no entry" list).
+"Who is in right now" simple table: Employee, Department, Clocked in at, Hours so far. (Live board only — no GPS/photos in Phase 1.)
+Pending approvals preview list (up to 5) with a link to Approvals.
+D2. Time Records — List View:
+Filters: Department (All Departments + each), date-range pickers (From/To), Quick Dates (Today, Yesterday, This Week, Last Week, This Pay Period, Last Pay Period), Job/Absence filter replaced in Phase 1 by a Record Type filter (All / Work / Absence / Adjustment), Search by Name, "Group by Date" checkbox.
+Summary strip above the table: Paid Hours, Unpaid Hours, Total Hours for the filtered set.
+Table columns: #, Full Name, Date (sortable), In, Out, Hours, Type, Approved (✓ manager / ✓ employee / —), edit and delete icon buttons per row.
+Action buttons above the table: Add Entry, Add Absence, Add Adjustment, Import Excel (reads a CSV/Excel file with columns Name, Date, In, Out and creates work entries; rows that fail show a plain-language import report — never a crash).
+Add Entry dialog: Department, Date, employee checklist (multi-select), In and Out time pickers, "Working Now" checkbox (Out stays open), Comment, buttons Add / Add & Next / Cancel.
+Add Absence dialog: Department, Date, employee checklist, Absence Type (Vacation, Sick, Personal, Holiday, Comp Time, Unpaid Leave), Hours (default 8.00), Paid / Unpaid (auto-set from type, editable), Comment, Add / Cancel.
+Add Adjustment dialog: employee, Date, Type (Hours / Amount), Addition / Deduction, Value, Comment, Add / Cancel. Adjustments appear as their own rows in List View and count into Paid Hours (Hours type) or are shown as an amount note (Amount type).
+D3. Time Records — Day View (tab next to List View):
+Weekly grid, one employee section at a time with a prev/next employee control and an employee search: columns Date, In, Out, Reg, OT, DT, Absence, Paid, Unpaid, Total.
+A blue total row under each week. Per-day "add" link opens Add Entry pre-filled for that employee/date.
+Buttons: Approve Selected, Unapprove Selected, Delete Selected, with a checkbox per day row.
+Phase 1 overtime display rule (the full overtime rule engine is Phase 2): OT = hours worked over 40 in the week that starts on the company's Week Start Day; DT stays 0.00 in Phase 1. Reg + OT + paid Absence = Paid. Total = Paid + Unpaid. Show these numbers consistently everywhere (List View, Day View, Dashboard, Reports) from ONE shared calculation function.
+D4. Users (employee roster):
+Toolbar: Add User, Copy Last User, Bulk Edit (edit Department / Role / Status for all checked users), Archive Selected, Show Archived toggle, Print list, search box (Name / Username / Employee No), Department filter.
+Table: #, Department, Full Name, Username, Employee No, Role, Status, Edit / Copy / Archive icon buttons per row.
+Add/Edit User form fields: First Name (required), Last Name, Username (required, unique within the company — duplicates show "That username is taken"), Set/Change Password, Employee Number, Email, Mobile Phone, Department (select), Role (Employee / Manager / Admin), Status (Active / Inactive), Hire Date, Full/Part Time (Full Time / Part Time), Rate Type (Hourly / Salary), Pay Rate, Timezone (Company default / specific timezone select), Auto Lunch Deduction (Use company setting / No / Yes with Minutes and After Hours), and the permission checkboxes in Part F.
+Archive instead of hard delete: archived users disappear from pickers and the clock, stay under Show Archived, and can be Unarchived. Deleting a user who has time records is blocked with a plain message telling the Admin to archive instead.
+D5. Departments:
+Add Department (Name required, Code optional), Import Excel/CSV (Name, Code), Edit, Delete (blocked with a plain message while users are assigned — reassign first).
+Table: #, Department Name, Code, # of Users, Managers, Edit/Delete.
+Department detail: Assign User (multi-select of unassigned/other-department users), remove user; Assign Managers (multi-select of users whose Role is Manager).
+D6. Company Settings (Admin only; this is the COMPANY settings screen inside the console — it is a different thing from the landing page's personal Settings modal and must not be merged with it):
+Common: Company Name, Company Short Name, Account Owner Email, Week Start Day (Sunday–Saturday select), Pay Period (Weekly / Bi-Weekly / Semi-Monthly / Monthly) + Pay Period Start Date, Default Timezone (select), Date Format (US / Canada / UK), Time Format (12-hour / 24-hour), Time Totals Format (2:30 / 2h 30m / 2.50 / 2.500), Currency Symbol.
+Time Rules: Rounding — Clock In (NEAREST / UP / DOWN) and Clock Out (NEAREST / UP / DOWN), each to the nearest 1 / 5 / 6 / 7 / 10 / 15 / 30 minutes; Auto Lunch Deduction (No / Yes / Per user) with Minutes to Deduct and After X Hours Worked; Default Shift Start and Default Shift End (used in Phase 1 for Late In / Early Out detection); Minimum Lunch Minutes.
+Save button with a "Settings saved" confirmation. These settings drive the calculations in Part I immediately for new records; existing records keep the totals they were saved with unless re-saved.
+D7. Approvals:
+Filters: Department, date range, Search by Name. Table grouped by employee: Date, In, Out, Hours, Type, Approved by Manager (state), Approved by Employee (state).
+Approve / Unapprove buttons act on checked rows. Manager approval and Employee approval are separate columns; a record is "Fully Approved" only when both are checked.
+Setting in Company Settings → Approvals (add this small section): Approval Mode (Off / Manager only / Employee and Manager). When Off, the Approvals view and badges are hidden. A Manager CAN approve their own records in Phase 1 (note this in a caption under the setting).
+Once a record is Fully Approved it is locked: Edit/Delete in List and Day View are disabled for it with a tooltip "Fully approved records are locked — unapprove to edit." (Full period Edit Lock is Phase 2.)
+D8. Reports (basic set only):
+Report picker list (each with a Favorite star that pins it to the top): Timecard Detail, Timecard Summary, Payroll Summary, Who Has No Entry.
+Every report takes: Department filter, date range (or Pay Period picker), Employee filter (All / one), then Preview on screen and Download as PDF, Download as Excel, Download as CSV (all three formats on every report).
+Timecard Detail: per employee per day — Date, In, Out, Lunch deducted, Reg, OT, Absence, Paid, Unpaid, Total; employee subtotals; company total.
+Timecard Summary: one row per employee — Reg, OT, Absence, Paid, Unpaid, Total.
+Payroll Summary: one row per employee — Total Paid Hours, Pay Rate, Gross Pay (Paid Hours × Pay Rate; Salary employees show their period salary instead), plus company total.
+Who Has No Entry: employees with no record on each day of the selected range.
+Numbers in every report must come from the same shared calculation function as Part D3 — a report that disagrees with Day View counts as not done.
+D9. Notifications (Admin screen + sending):
+Master Notify ON/OFF switch. Notify Emails field (semicolon/comma-separated extra recipients).
+Event table, one row per Phase 1 event, each with ON/OFF and three recipient checkboxes (To Employee / To Managers / To Admins): Clock IN, Clock OUT, Late IN (after Default Shift Start + 5 min grace), Early OUT (before Default Shift End), Forgot Clock In (no entry by Default Shift Start + 60 min on a weekday — evaluated when the Dashboard or this screen is opened, and listed in a "Recent notifications" log on this screen), Manager Approve Timecard, Employee Approve Timecard, Daily Total (end-of-day summary per employee), Weekly Total.
+Every notification actually sent is recorded in the Recent Notifications log (time, event, employee, recipients). In Phase 1, "sending" means creating the email through the app's existing email path AND always writing to this log (so it is testable without a mail server).
+================
+PART E — PERMISSIONS (per user, set in the Add/Edit User form)
+================
+E1. Permission checkboxes on each user: Allow edit own time, Allow comments on records, Allow approve time records (Manager use), Allow view reports, View own pay rate, Allow add entry request, Allow add absence request, Allow see Who Is In (Dashboard board), Access Company Settings (Admin use), Access Users (Admin use), Access Notifications settings.
+E2. Enforcement is real, not cosmetic: a control a user has no permission for is hidden or disabled AND the underlying action is refused if attempted. An Employee with "Allow edit own time" OFF sees their records read-only in My Hours. The Approvals badge and view only appear for users who can approve. Reports only appear for users with report permission.
+E3. Admins always have every permission; the checkboxes are disabled (checked) on Admin accounts.
+================
+PART F — WEB PUNCH CLOCK ("/clock") — Phase 1's only punch method
+================
+F1. For a signed-in Employee/Manager on a phone or desktop: big live clock (current time, company timezone, date), the employee's name and department, ONE big primary button that reads CLOCK IN when they are clocked out and CLOCK OUT when they are clocked in.
+F2. Under the button: today's status line — "Clocked in at 9:02 AM • 3h 12m so far" or "Not clocked in today", plus today's earlier punches listed (In/Out pairs).
+F3. Optional Comment field under the button (saved on the record) when the user has the comments permission.
+F4. Pressing the button creates the real time record immediately (Part I rules apply: rounding, auto lunch at clock-out), shows a confirmation ("Clocked in at 9:02 AM ✓") and fires the Clock IN / Late IN notification rules. A second press of CLOCK IN while already clocked in is impossible — the button only offers CLOCK OUT.
+F5. No PIN, QR, face, GPS, photo, or location capture in Phase 1 — those are later phases and must not appear as dead buttons or menu items.
+================
+PART G — MY HOURS ("/my-hours", logged-in employee)
+================
+G1. The employee's home after sign-in. It REUSES the landing sheet design (same grid, same colors, same fonts, same lunch-yellow rule) bound to their real account records for the selected period: Employee Name is fixed to their account (read-only), Period Starting works as on the landing page.
+G2. The rows are their real records (punches + entries an Admin/Manager added + absences + adjustments read-only). Editing a time cell is allowed only with the "Allow edit own time" permission and only on records that are not Fully Approved; edited records return to unapproved-by-manager state.
+G3. Buttons: "Go to Punch Clock" (to "/clock"), "Add Entry Request" and "Add Absence Request" (only with the matching permissions) — these create PENDING requests shown with a Pending tag; a Manager approving the request in Approvals turns it into a real record; denying removes it and notifies the employee.
+G4. An "Approve My Timecard" button for the period (employee approval column), enabled when Approval Mode includes employees.
+G5. Signature block and Print work exactly as on the landing sheet, printing their real records.
+G6. "Exit to Timesheet" returns to the public landing sheet without signing out; a separate Sign Out ends the session.
+================
+PART H — CALCULATION RULES (one shared function, used everywhere)
+================
+H1. Duration: Out − In. If Out is earlier than In, treat it as next-day (overnight) and add 24h. Open records ("Working Now", no Out) show "—" for hours and are excluded from totals until closed, except Dashboard "hours so far" which counts to now.
+H2. Rounding applies to the punch times first (separately for In and Out, using Company Settings), then duration is computed.
+H3. Lunch: (a) if the record has explicit Lunch Start/End (sheet entry), deduct that duration; (b) else if Auto Lunch Deduction applies (company setting, or the user's per-user setting), deduct the configured Minutes once the worked duration reaches the After X Hours threshold. Never deduct twice.
+H4. Totals: Paid = Reg + OT + paid Absence hours + Hours-type Adjustments (Addition +, Deduction −). Unpaid = unpaid Absence hours. Total = Paid + Unpaid. All displays use the company's Time Totals Format setting.
+H5. Pay Period for a company is anchored on its Pay Period Start Date and repeats by its Pay Period type; "This Pay Period" quick filters and the Dashboard use it. The landing sheet keeps its own independent Period Starting behavior.
+H6. Late IN = In later than Default Shift Start + 5 minutes. Early OUT = Out earlier than Default Shift End. These flags show as small tags in List View and drive notifications.
+================
+PART I — OUT OF SCOPE (Phase 2–4 — do NOT build, not even as stubs)
+================
+No: PIN clock / PIN kiosk, QR/barcode clock, RFID/NFC, face recognition, photo capture, GPS/geofencing/Clock Points, offline mode, iFrame embed, screen monitoring, shifts and shift punch restrictions, Shift Schedule / Weekly Shift Plan / Job Schedule, the full overtime rule engine (named rules per user), Jobs, Projects, PTO accruals and PTO balances (Phase 1 absences are simple typed entries only), Edit Lock, messaging, bulletin board, payroll-file exports beyond the 4 basic reports (no ADP/Paychex/QuickBooks files yet), Developer API. Do not put disabled buttons, greyed menu items, or "coming soon" placeholders for any of these anywhere.
+================
+PART J — DEMO SEED DATA (create on first run so it can be tested)
+================
+Company: "Royal Transportation" (timezone America/New_York, Week Start Day = Sunday, Bi-Weekly pay period starting Sunday 2026-10-11), Departments: Office, Dispatch, Drivers.
+Users (password for all demo accounts: demo1234 — show these on the Auth screen in a small "Demo accounts" box for testing only):
+admin1 — Admin — Alex Owner (owner)
+manager1 — Manager, Dispatch — Maria Manager (can approve, can view reports)
+emp1 — Employee, Office — Emily Employee (can edit own time)
+emp2 — Employee, Drivers — David Driver (cannot edit own time)
+emp3 — Employee, Drivers — inactive example (Status Inactive)
+Seed ~10 work records across emp1/emp2 in the current pay period (including one late-in, one early-out, one absence (Sick, paid), one adjustment (+0.50 hours)), with 2 records pending approval, so Dashboard, List View, Day View, Approvals, and all 4 reports show real numbers immediately.
+================
+PART K — ACCEPTANCE CHECKLIST (every line must pass)
+================
+Landing page "/" is visually and functionally identical to the current app, including: Settings gear at the far right, theme switch only inside the Settings modal, yellow #FEF9C3 on Lunch cells only, large time fonts, Copy prev, TODAY row, signature, history, guest auto-save — and its Settings modal has exactly its original contents with NO admin/business item inside it.
+The only landing header change is "Login / Sign Up" → "Business Login", opening /auth.
+From /auth, Create Business Account with a new company lands the new owner in /admin for THAT company, and that owner cannot see Royal Transportation's demo people or records.
+Sign in as manager1: console opens, Approvals badge shows the seeded pending count, Users view allows edit but Company Settings is not accessible unless permitted.
+Sign in as emp2 (no edit permission): My Hours is read-only; as emp1: editable, and editing a record clears its manager-approved state.
+emp3 (Inactive) cannot sign in and does not appear in Add Entry employee pickers.
+/clock as emp1: CLOCK IN creates a record visible immediately in admin List View (rounded per Company Settings); the button flips to CLOCK OUT; clocking out applies auto lunch deduction when the threshold is met, and the Late IN tag/notification fires when punching after shift start + 5 min.
+Add Entry for two employees at once creates both records; Add Absence (Sick, 8.00) shows as paid Absence in Day View totals; Add Adjustment (+0.50 Hours) raises Paid Hours by exactly 0.50 in List View, Day View, and Timecard Summary — all three agree.
+Import Excel with 3 valid rows and 1 bad row imports the 3 and reports the bad row in plain language.
+Approvals: approving as manager then as employee makes the record Fully Approved and locks it in List/Day View (edit disabled with the tooltip); unapproving unlocks it.
+Approval Mode = Off hides Approvals everywhere; Mode = Manager only hides the employee approval column and the My Hours approve button.
+Company Settings change: set rounding to NEAREST 15 minutes, clock in at 9:07 — the saved record shows 9:00; set Time Totals Format to 2.50 — totals render as decimals everywhere including reports.
+Reports for the seeded period: Payroll Summary Gross Pay = Paid Hours × Pay Rate per employee and matches Timecard Summary's Paid column per employee; Who Has No Entry lists emp1/emp2 on the seeded empty days.
+Duplicate username in Add User is refused in plain language; deleting a user with records is refused with the archive message; archiving emp2 removes them from pickers but their records remain in List View history.
+Notifications: with Clock IN on and To Admins checked, a punch writes a row to Recent Notifications; turning the event OFF stops new rows.
+No dead or placeholder UI for any OUT OF SCOPE feature exists anywhere (no PIN/QR/GPS/schedule/PTO-balance buttons or menu items).
+No error anywhere shows raw JSON, a code, or a stack trace — all errors are plain language.
+Mobile: landing sheet, /auth, /clock, and My Hours are fully usable at 390px wide; the admin console sidebar collapses to a hamburger and tables scroll horizontally without overlapping controls.
