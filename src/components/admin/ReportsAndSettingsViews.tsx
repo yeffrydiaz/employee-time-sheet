@@ -62,6 +62,7 @@ import {
 
 interface ApprovalsViewProps {
   company: Company;
+  currentUser: AppUser;
   users: AppUser[];
   departments: Department[];
   records: TimeRecord[];
@@ -70,6 +71,7 @@ interface ApprovalsViewProps {
 
 export function ApprovalsView({
   company,
+  currentUser,
   users,
   departments,
   records,
@@ -141,8 +143,26 @@ export function ApprovalsView({
 
   const showEmployeeColumn = company.approvalMode === 'Employee and Manager';
 
+  // F1 Permissions mirroring Approve:
+  // Manager approval/unapproval is available only to Admin and Managers with allowApproveRecords
+  const canApproveAsManager =
+    currentUser.role === 'Admin' ||
+    (currentUser.role === 'Manager' && Boolean(currentUser.permissions.allowApproveRecords));
+
+  // Employee approval/unapproval is available to the employee who owns the record (for their own records) and to Admins acting on a record.
+  const canActAsEmployeeOnRecord = (rec: TimeRecord) =>
+    currentUser.role === 'Admin' || rec.userId === currentUser.id;
+
+  const canActAsEmployeeOnSelection =
+    selectedRecordIds.length > 0 &&
+    (currentUser.role === 'Admin' ||
+      selectedRecordIds.every(id => {
+        const rec = records.find(r => r.id === id);
+        return Boolean(rec && rec.userId === currentUser.id);
+      }));
+
   const handleBulkApproveManager = () => {
-    if (selectedRecordIds.length === 0) return;
+    if (selectedRecordIds.length === 0 || !canApproveAsManager) return;
     setRecordsApproval(company.id, selectedRecordIds, { approvedByManager: true });
     setSelectedRecordIds([]);
     onRefresh();
@@ -150,22 +170,27 @@ export function ApprovalsView({
   };
 
   const handleBulkApproveEmployee = () => {
-    if (selectedRecordIds.length === 0) return;
+    if (selectedRecordIds.length === 0 || !canActAsEmployeeOnSelection) return;
     setRecordsApproval(company.id, selectedRecordIds, { approvedByEmployee: true });
     setSelectedRecordIds([]);
     onRefresh();
     setStatusBanner(`Approved ${selectedRecordIds.length} record(s) as Employee.`);
   };
 
-  const handleBulkUnapprove = () => {
-    if (selectedRecordIds.length === 0) return;
-    setRecordsApproval(company.id, selectedRecordIds, {
-      approvedByManager: false,
-      approvedByEmployee: false,
-    });
+  const handleBulkUnapproveManager = () => {
+    if (selectedRecordIds.length === 0 || !canApproveAsManager) return;
+    setRecordsApproval(company.id, selectedRecordIds, { approvedByManager: false });
     setSelectedRecordIds([]);
     onRefresh();
-    setStatusBanner(`Unapproved ${selectedRecordIds.length} record(s).`);
+    setStatusBanner(`Unapproved ${selectedRecordIds.length} record(s) as Manager.`);
+  };
+
+  const handleBulkUnapproveEmployee = () => {
+    if (selectedRecordIds.length === 0 || !canActAsEmployeeOnSelection) return;
+    setRecordsApproval(company.id, selectedRecordIds, { approvedByEmployee: false });
+    setSelectedRecordIds([]);
+    onRefresh();
+    setStatusBanner(`Unapproved ${selectedRecordIds.length} record(s) as Employee.`);
   };
 
   return (
@@ -231,32 +256,46 @@ export function ApprovalsView({
 
         <div className="flex flex-wrap items-center justify-between gap-2 pt-3 border-t border-slate-100">
           <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              disabled={selectedRecordIds.length === 0}
-              onClick={handleBulkApproveManager}
-              className="px-3.5 py-2 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg disabled:opacity-40 whitespace-nowrap"
-            >
-              Approve ({selectedRecordIds.length})
-            </button>
-            {showEmployeeColumn && (
+            {canApproveAsManager && (
               <button
                 type="button"
                 disabled={selectedRecordIds.length === 0}
+                onClick={handleBulkApproveManager}
+                className="px-3.5 py-2 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg disabled:opacity-40 whitespace-nowrap"
+              >
+                Approve ({selectedRecordIds.length})
+              </button>
+            )}
+            {showEmployeeColumn && (currentUser.role === 'Admin' || canActAsEmployeeOnSelection || selectedRecordIds.length === 0) && (
+              <button
+                type="button"
+                disabled={!canActAsEmployeeOnSelection}
                 onClick={handleBulkApproveEmployee}
                 className="px-3.5 py-2 text-xs font-semibold text-emerald-800 bg-emerald-100 hover:bg-emerald-200 rounded-lg disabled:opacity-40 whitespace-nowrap"
               >
                 Approve as Employee ({selectedRecordIds.length})
               </button>
             )}
-            <button
-              type="button"
-              disabled={selectedRecordIds.length === 0}
-              onClick={handleBulkUnapprove}
-              className="px-3.5 py-2 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg disabled:opacity-40 whitespace-nowrap"
-            >
-              Unapprove ({selectedRecordIds.length})
-            </button>
+            {canApproveAsManager && (
+              <button
+                type="button"
+                disabled={selectedRecordIds.length === 0}
+                onClick={handleBulkUnapproveManager}
+                className="px-3.5 py-2 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg disabled:opacity-40 whitespace-nowrap"
+              >
+                Unapprove as Manager ({selectedRecordIds.length})
+              </button>
+            )}
+            {showEmployeeColumn && (currentUser.role === 'Admin' || canActAsEmployeeOnSelection || selectedRecordIds.length === 0) && (
+              <button
+                type="button"
+                disabled={!canActAsEmployeeOnSelection}
+                onClick={handleBulkUnapproveEmployee}
+                className="px-3.5 py-2 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg disabled:opacity-40 whitespace-nowrap"
+              >
+                Unapprove as Employee ({selectedRecordIds.length})
+              </button>
+            )}
           </div>
           <span className="text-xs text-slate-500">
             Approval Mode: <strong>{company.approvalMode}</strong>
@@ -422,13 +461,15 @@ export function ApprovalsView({
                           <td className="px-3 py-2.5 text-center">
                             <button
                               type="button"
+                              disabled={!canApproveAsManager}
                               onClick={() => {
+                                if (!canApproveAsManager) return;
                                 setRecordsApproval(company.id, [rec.id], {
                                   approvedByManager: !rec.approvedByManager,
                                 });
                                 onRefresh();
                               }}
-                              className={`px-2.5 py-1 rounded text-xs font-bold transition-colors ${
+                              className={`px-2.5 py-1 rounded text-xs font-bold transition-colors disabled:opacity-60 disabled:cursor-not-allowed ${
                                 rec.approvedByManager
                                   ? 'text-emerald-800 bg-emerald-100 hover:bg-emerald-200'
                                   : 'text-amber-800 bg-amber-50 hover:bg-amber-100'
@@ -441,13 +482,15 @@ export function ApprovalsView({
                             <td className="px-3 py-2.5 text-center">
                               <button
                                 type="button"
+                                disabled={!canActAsEmployeeOnRecord(rec)}
                                 onClick={() => {
+                                  if (!canActAsEmployeeOnRecord(rec)) return;
                                   setRecordsApproval(company.id, [rec.id], {
                                     approvedByEmployee: !rec.approvedByEmployee,
                                   });
                                   onRefresh();
                                 }}
-                                className={`px-2.5 py-1 rounded text-xs font-bold transition-colors ${
+                                className={`px-2.5 py-1 rounded text-xs font-bold transition-colors disabled:opacity-60 disabled:cursor-not-allowed ${
                                   rec.approvedByEmployee
                                     ? 'text-emerald-800 bg-emerald-100 hover:bg-emerald-200'
                                     : 'text-amber-800 bg-amber-50 hover:bg-amber-100'
@@ -953,9 +996,7 @@ export function ReportsView({
               {formatDateDisplay(toDate, company.dateFormat)})
             </span>
             <span className="px-2 py-0.5 rounded-md bg-indigo-50 text-indigo-700 border border-indigo-200 text-[11px] font-bold">
-              Overtime Rule:{' '}
-              {company.calculateDailyOvertime ? 'Daily (>8h/day) + ' : ''}
-              {company.calculateOvertimeWeekly !== false ? 'Weekly (>40h/wk)' : 'Per-Period (>40h/period)'}
+              Overtime Rule: Weekly (&gt;40h/wk)
             </span>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -1225,12 +1266,10 @@ export function ReportsView({
                 <th className="px-3 py-3 text-left">Department</th>
                 <th className="px-3 py-3 text-left">Rate Type</th>
                 <th className="px-3 py-3 text-right">
-                  Regular Hours ({company.calculateDailyOvertime ? '≤8/day, ' : ''}
-                  {company.calculateOvertimeWeekly !== false ? '≤40/wk' : '≤40/period'})
+                  Regular Hours (≤40/wk)
                 </th>
                 <th className="px-3 py-3 text-right">
-                  Overtime Hours ({company.calculateDailyOvertime ? '>8/day, ' : ''}
-                  {company.calculateOvertimeWeekly !== false ? '>40/wk' : '>40/period'})
+                  Overtime Hours (&gt;40/wk)
                 </th>
                 <th className="px-3 py-3 text-right">Total Paid Hours</th>
                 <th className="px-3 py-3 text-right">Pay Rate</th>
@@ -1397,9 +1436,6 @@ export function CompanySettingsView({
   const [calculateOvertimeWeekly, setCalculateOvertimeWeekly] = useState<boolean>(
     company.calculateOvertimeWeekly !== false
   );
-  const [calculateDailyOvertime, setCalculateDailyOvertime] = useState<boolean>(
-    Boolean(company.calculateDailyOvertime)
-  );
   const [highlightPublicHolidays, setHighlightPublicHolidays] = useState<boolean>(
     company.highlightPublicHolidays !== false
   );
@@ -1436,7 +1472,6 @@ export function CompanySettingsView({
       defaultShiftEnd,
       minLunchMinutes: Number(minLunchMinutes) || 30,
       calculateOvertimeWeekly,
-      calculateDailyOvertime,
       highlightPublicHolidays,
       holidayCountry,
       approvalMode,
@@ -1785,8 +1820,8 @@ export function CompanySettingsView({
           </div>
         </div>
 
-        {/* Overtime Calculation Rules */}
-        <div className="pt-3 border-t border-slate-100 grid grid-cols-1 sm:grid-cols-2 gap-3">
+        {/* Overtime Calculation Rule */}
+        <div className="pt-3 border-t border-slate-100">
           <label className="flex items-start justify-between gap-3 p-3.5 rounded-xl bg-indigo-50/60 border border-indigo-200/80 cursor-pointer">
             <div>
               <span className="text-xs font-bold text-slate-900 block">
@@ -1803,25 +1838,6 @@ export function CompanySettingsView({
               checked={calculateOvertimeWeekly}
               onChange={e => setCalculateOvertimeWeekly(e.target.checked)}
               className="w-5 h-5 mt-0.5 rounded text-indigo-600 focus:ring-indigo-500 shrink-0"
-            />
-          </label>
-
-          <label className="flex items-start justify-between gap-3 p-3.5 rounded-xl bg-rose-50/60 border border-rose-200/80 cursor-pointer">
-            <div>
-              <span className="text-xs font-bold text-slate-900 block">
-                Calculate Daily Overtime (&gt;8 hrs/day)
-              </span>
-              <span className="text-[11px] text-slate-600 mt-0.5 block leading-snug">
-                {calculateDailyOvertime
-                  ? 'Any hours worked beyond 8 hours in a single day are counted as Daily Overtime.'
-                  : 'Off: Daily shifts over 8 hours count as regular hours up to the 40-hour threshold.'}
-              </span>
-            </div>
-            <input
-              type="checkbox"
-              checked={calculateDailyOvertime}
-              onChange={e => setCalculateDailyOvertime(e.target.checked)}
-              className="w-5 h-5 mt-0.5 rounded text-rose-600 focus:ring-rose-500 shrink-0"
             />
           </label>
         </div>

@@ -186,11 +186,10 @@ export default function MyHoursScreen({
   );
   const overtimeDisplayHours = useMemo(
     () =>
-      company.calculateOvertimeWeekly !== false || company.calculateDailyOvertime
+      company.calculateOvertimeWeekly !== false
         ? periodSummary.otHours
         : over40PeriodHours,
     [
-      company.calculateDailyOvertime,
       company.calculateOvertimeWeekly,
       over40PeriodHours,
       periodSummary.otHours,
@@ -198,104 +197,6 @@ export default function MyHoursScreen({
   );
   const isOvertimeStatus = overtimeDisplayHours > 0;
 
-  // Browser notification system for 5 consecutive hours worked without a lunch break
-  const notifiedLunchKeysRef = useRef<Set<string>>(new Set());
-  const [lunchBreakAlert, setLunchBreakAlert] = useState<{
-    dateStr: string;
-    consecutiveHours: number;
-  } | null>(null);
-
-  const checkFiveHoursNoLunch = useCallback(() => {
-    let shiftEnabled = true;
-    try {
-      const saved = localStorage.getItem('shift_settings');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (typeof parsed.enabled === 'boolean') shiftEnabled = parsed.enabled;
-      }
-    } catch {}
-
-    if (!shiftEnabled) {
-      setLunchBreakAlert(null);
-      return;
-    }
-
-    const parseTimeToMins = (t: string | undefined): number | null => {
-      if (!t || !t.includes(':')) return null;
-      const [h, m] = t.split(':').map(Number);
-      if (isNaN(h) || isNaN(m)) return null;
-      return h * 60 + m;
-    };
-
-    const now = new Date();
-    const nowMins = now.getHours() * 60 + now.getMinutes();
-
-    let found: { dateStr: string; consecutiveHours: number; alertKey: string } | null = null;
-    for (const rec of userPeriodRecords) {
-      if (rec.recordType !== 'Work') continue;
-      const hasLunch = Boolean(rec.lunchStart && rec.lunchEnd);
-      if (hasLunch) continue;
-
-      const inMins = parseTimeToMins(rec.timeIn);
-      const outMins = parseTimeToMins(rec.timeOut);
-
-      if (inMins !== null && outMins !== null && outMins > inMins) {
-        const workedMins = outMins - inMins;
-        if (workedMins >= 300) {
-          found = {
-            dateStr: rec.date,
-            consecutiveHours: workedMins / 60,
-            alertKey: `${rec.id}-${rec.timeIn}-${rec.timeOut}-nolunch`,
-          };
-          break;
-        }
-      } else if (rec.date === todayISO && inMins !== null && (rec.workingNow || outMins === null)) {
-        const elapsed = nowMins - inMins;
-        if (elapsed >= 300) {
-          found = {
-            dateStr: rec.date,
-            consecutiveHours: elapsed / 60,
-            alertKey: `${rec.id}-active-5h`,
-          };
-          break;
-        }
-      }
-    }
-
-    if (found) {
-      setLunchBreakAlert({ dateStr: found.dateStr, consecutiveHours: found.consecutiveHours });
-      if (!notifiedLunchKeysRef.current.has(found.alertKey)) {
-        notifiedLunchKeysRef.current.add(found.alertKey);
-        const title = 'Lunch Break Reminder — 5+ Consecutive Hours';
-        const body = `You have worked ${found.consecutiveHours.toFixed(2)} consecutive hours on ${found.dateStr} without entering a lunch break time.`;
-        if (typeof window !== 'undefined' && 'Notification' in window) {
-          if (Notification.permission === 'granted') {
-            try {
-              new Notification(title, { body, tag: `myhours-lunch-${found.alertKey}` });
-            } catch {}
-          } else if (Notification.permission === 'default') {
-            Notification.requestPermission()
-              .then(p => {
-                if (p === 'granted') {
-                  try {
-                    new Notification(title, { body, tag: `myhours-lunch-${found!.alertKey}` });
-                  } catch {}
-                }
-              })
-              .catch(() => {});
-          }
-        }
-      }
-    } else {
-      setLunchBreakAlert(null);
-    }
-  }, [userPeriodRecords, todayISO]);
-
-  useEffect(() => {
-    checkFiveHoursNoLunch();
-    const id = window.setInterval(checkFiveHoursNoLunch, 30000);
-    return () => window.clearInterval(id);
-  }, [checkFiveHoursNoLunch]);
 
   const canEditOwnTime = Boolean(user.permissions.allowEditOwnTime);
   const showEmployeeApprove = company.approvalMode === 'Employee and Manager';
@@ -714,29 +615,6 @@ export default function MyHoursScreen({
               />
             </div>
           </div>
-
-          {lunchBreakAlert && (
-            <div
-              role="alert"
-              className="mb-4 p-3.5 bg-amber-50 dark:bg-amber-950/60 border border-amber-300 dark:border-amber-700 rounded-xl text-xs sm:text-sm text-amber-900 dark:text-amber-100 flex items-center justify-between gap-3 print:hidden"
-            >
-              <div className="flex items-center gap-2">
-                <Utensils className="w-4 h-4 text-amber-600 shrink-0" />
-                <span>
-                  <strong>Lunch Break Alert:</strong> You worked{' '}
-                  <strong>{lunchBreakAlert.consecutiveHours.toFixed(2)} consecutive hours</strong> on{' '}
-                  <strong>{lunchBreakAlert.dateStr}</strong> without entering a lunch break time.
-                </span>
-              </div>
-              <button
-                type="button"
-                onClick={() => setLunchBreakAlert(null)}
-                className="text-amber-700 hover:text-amber-900 p-1"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-          )}
 
           {/* Mobile Summary Strip (Visible on Mobile) */}
           <div className="md:hidden mb-4 p-3 rounded-xl border border-gray-200 dark:border-slate-800 bg-gray-50/80 dark:bg-slate-800/60 flex items-center justify-between gap-2 print:hidden">

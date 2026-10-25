@@ -268,7 +268,6 @@ export function evaluateRecordsWithOvertime(
   );
 
   const calculateWeekly = company.calculateOvertimeWeekly !== false;
-  const calculateDaily = Boolean(company.calculateDailyOvertime);
 
   // Group Work records by (userId + weekStartDate) when Weekly, or (userId + payPeriod) when Per-period
   const workByUserGroup = new Map<string, TimeRecord[]>();
@@ -338,7 +337,7 @@ export function evaluateRecordsWithOvertime(
     }
   }
 
-  // Allocate Reg (up to 8h/day when daily OT is enabled, and up to 40h per week/period) and OT chronologically per user bucket
+  // Allocate Reg (up to 40h per week/period) and OT chronologically per user bucket
   for (const [, weekRecords] of workByUserGroup.entries()) {
     weekRecords.sort((a, b) => {
       if (a.date !== b.date) return a.date.localeCompare(b.date);
@@ -348,8 +347,7 @@ export function evaluateRecordsWithOvertime(
       return a.id.localeCompare(b.id);
     });
 
-    let weeklyRegCandidateAccumulator = 0;
-    const dailyWorkedByDate = new Map<string, number>();
+    let weeklyWorkedAccumulator = 0;
 
     for (const rec of weekRecords) {
       const isOpen = Boolean(rec.workingNow || !rec.timeIn || !rec.timeOut);
@@ -390,23 +388,10 @@ export function evaluateRecordsWithOvertime(
         lunchDeductedMins = snap.lunchDeductedMins;
       }
 
-      // 1. Daily Overtime (>8 hrs in a single day) if enabled
-      let dailyRegCandidate = workedHours;
-      let dailyOtHours = 0;
-      if (calculateDaily) {
-        const prevDayWorked = dailyWorkedByDate.get(rec.date) || 0;
-        const remainingDailyReg = Math.max(0, 8 - prevDayWorked);
-        dailyRegCandidate = Math.min(workedHours, remainingDailyReg);
-        dailyOtHours = Math.max(0, workedHours - dailyRegCandidate);
-        dailyWorkedByDate.set(rec.date, prevDayWorked + workedHours);
-      }
-
-      // 2. Weekly / Per-Period Overtime (>40 regular candidate hours)
-      const remainingRegular = Math.max(0, 40 - weeklyRegCandidateAccumulator);
-      const regHours = Math.min(dailyRegCandidate, remainingRegular);
-      const bucketOtHours = Math.max(0, dailyRegCandidate - regHours);
-      const otHours = dailyOtHours + bucketOtHours;
-      weeklyRegCandidateAccumulator += dailyRegCandidate;
+      const remainingRegular = Math.max(0, 40 - weeklyWorkedAccumulator);
+      const regHours = Math.min(workedHours, remainingRegular);
+      const otHours = Math.max(0, workedHours - regHours);
+      weeklyWorkedAccumulator += workedHours;
 
       result.set(rec.id, {
         record: rec,

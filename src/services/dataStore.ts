@@ -132,7 +132,6 @@ function buildInitialSeedStore(): BackofficeStore {
     defaultShiftEnd: '17:00',
     minLunchMinutes: 30,
     calculateOvertimeWeekly: true,
-    calculateDailyOvertime: false,
     highlightPublicHolidays: true,
     holidayCountry: 'US',
     approvalMode: 'Employee and Manager',
@@ -811,7 +810,6 @@ export function createBusinessAccount(input: {
     defaultShiftEnd: '17:00',
     minLunchMinutes: 30,
     calculateOvertimeWeekly: true,
-    calculateDailyOvertime: false,
     highlightPublicHolidays: true,
     holidayCountry: 'US',
     approvalMode: 'Employee and Manager',
@@ -900,54 +898,16 @@ export function updateCompanySettings(
   store.companies[idx] = updated;
   saveStore(store);
 
-  if (
-    typeof updates.calculateOvertimeWeekly === 'boolean' ||
-    typeof updates.calculateDailyOvertime === 'boolean' ||
-    typeof updates.highlightPublicHolidays === 'boolean' ||
-    typeof updates.holidayCountry === 'string'
-  ) {
-    try {
-      const rawShift = localStorage.getItem('shift_settings');
-      const parsedShift = rawShift ? JSON.parse(rawShift) : {};
-      if (typeof updates.calculateOvertimeWeekly === 'boolean') {
-        parsedShift.calculateOvertimeWeekly = updates.calculateOvertimeWeekly;
-      }
-      if (typeof updates.calculateDailyOvertime === 'boolean') {
-        parsedShift.calculateDailyOvertime = updates.calculateDailyOvertime;
-      }
-      if (typeof updates.highlightPublicHolidays === 'boolean') {
-        parsedShift.highlightPublicHolidays = updates.highlightPublicHolidays;
-      }
-      if (typeof updates.holidayCountry === 'string') {
-        parsedShift.holidayCountry = updates.holidayCountry;
-      }
-      localStorage.setItem('shift_settings', JSON.stringify(parsedShift));
-    } catch {}
-  }
-
   return { ok: true, company: updated };
 }
 
 export function syncOvertimeCalculationMode(
-  calculateOvertimeWeekly: boolean,
-  calculateDailyOvertime?: boolean
+  calculateOvertimeWeekly: boolean
 ): void {
   const store = loadStore();
   store.companies = store.companies.map(c => ({
     ...c,
     calculateOvertimeWeekly,
-    ...(typeof calculateDailyOvertime === 'boolean'
-      ? { calculateDailyOvertime }
-      : {}),
-  }));
-  saveStore(store);
-}
-
-export function syncDailyOvertimeMode(calculateDailyOvertime: boolean): void {
-  const store = loadStore();
-  store.companies = store.companies.map(c => ({
-    ...c,
-    calculateDailyOvertime,
   }));
   saveStore(store);
 }
@@ -1711,7 +1671,7 @@ export function deleteTimeRecords(
 }
 
 /**
- * Approve or Unapprove records by Manager and/or Employee (Part D7, G4)
+ * Approve or Unapprove records by Manager OR Employee independently (Part D7, G4, F1)
  */
 export function setRecordsApproval(
   companyId: string,
@@ -1719,7 +1679,7 @@ export function setRecordsApproval(
   changes: { approvedByManager?: boolean; approvedByEmployee?: boolean }
 ): void {
   const store = loadStore();
-  const affectedUsers = new Set<string>();
+  const countByUser = new Map<string, number>();
 
   for (const r of store.records) {
     if (r.companyId === companyId && recordIds.includes(r.id)) {
@@ -1732,12 +1692,12 @@ export function setRecordsApproval(
       if (changes.approvedByEmployee !== undefined) {
         r.approvedByEmployee = changes.approvedByEmployee;
       }
-      affectedUsers.add(r.userId);
+      countByUser.set(r.userId, (countByUser.get(r.userId) || 0) + 1);
     }
   }
 
-  // Trigger notifications if approved
-  for (const userId of affectedUsers) {
+  // Trigger per-column notifications for approve and unapprove actions separately
+  for (const [userId, userRecCount] of countByUser.entries()) {
     const user = store.users.find(u => u.id === userId && u.companyId === companyId);
     if (!user) continue;
     if (changes.approvedByManager === true) {
@@ -1746,7 +1706,15 @@ export function setRecordsApproval(
         companyId,
         'Manager Approve Timecard',
         user,
-        `Manager approved ${recordIds.length} time record(s) for ${user.fullName}`
+        `Manager approved ${userRecCount} time record(s) for ${user.fullName}`
+      );
+    } else if (changes.approvedByManager === false) {
+      dispatchNotificationInternal(
+        store,
+        companyId,
+        'Manager Approve Timecard',
+        user,
+        `Manager unapproved ${userRecCount} time record(s) for ${user.fullName}`
       );
     }
     if (changes.approvedByEmployee === true) {
@@ -1755,7 +1723,15 @@ export function setRecordsApproval(
         companyId,
         'Employee Approve Timecard',
         user,
-        `${user.fullName} approved their timecard (${recordIds.length} record(s))`
+        `Employee approved their timecard (${userRecCount} record(s))`
+      );
+    } else if (changes.approvedByEmployee === false) {
+      dispatchNotificationInternal(
+        store,
+        companyId,
+        'Employee Approve Timecard',
+        user,
+        `Employee unapproved their timecard (${userRecCount} record(s))`
       );
     }
   }
@@ -1830,8 +1806,6 @@ export function getActiveOpenRecordForUser(companyId: string, userId: string): T
 export function punchClockIn(
   companyId: string,
   userId: string,
-  rawHHMM: string,
-  dateStr: string,
   comment?: string
 ): { ok: true; record: TimeRecord } | { ok: false; error: string } {
   const store = loadStore();
@@ -1853,6 +1827,10 @@ export function punchClockIn(
   if (existingOpen) {
     return { ok: false, error: 'You are already clocked in.' };
   }
+
+  const now = new Date();
+  const rawHHMM = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+  const dateStr = formatDateISO(now);
 
   const roundedIn = roundTimeHHMM(rawHHMM, company.roundingInDir, company.roundingInMins);
   const { lateIn } = detectShiftFlags(roundedIn, undefined, company);
@@ -1876,7 +1854,7 @@ export function punchClockIn(
     approvedByManager: false,
     approvedByEmployee: false,
     requestStatus: 'Approved',
-    createdAt: new Date().toISOString(),
+    createdAt: now.toISOString(),
   };
 
   store.records.push(newRecord);
@@ -1908,7 +1886,6 @@ export function punchClockIn(
 export function punchClockOut(
   companyId: string,
   userId: string,
-  rawHHMM: string,
   comment?: string
 ): { ok: true; record: TimeRecord } | { ok: false; error: string } {
   const store = loadStore();
@@ -1927,6 +1904,9 @@ export function punchClockOut(
   if (idx === -1) {
     return { ok: false, error: 'No active clock-in record found.' };
   }
+
+  const now = new Date();
+  const rawHHMM = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
 
   const openRec = store.records[idx];
   const roundedOut = roundTimeHHMM(rawHHMM, company.roundingOutDir, company.roundingOutMins);

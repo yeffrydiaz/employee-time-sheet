@@ -648,6 +648,7 @@ export default function AdminConsole({
             {activeView === 'Approvals' && (
               <ApprovalsView
                 company={company}
+                currentUser={currentUser}
                 users={allUsers}
                 departments={departments}
                 records={records}

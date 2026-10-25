@@ -47,7 +47,6 @@ export interface Company {
   defaultShiftEnd: string; // HH:mm
   minLunchMinutes: number;
   calculateOvertimeWeekly?: boolean; // default true (Weekly >40h/wk vs Per-period >40h/period)
-  calculateDailyOvertime?: boolean; // default false (Daily >8h/day overtime)
   highlightPublicHolidays?: boolean; // default true
   holidayCountry?: 'US' | 'CA' | 'GB' | 'AU' | 'MX' | 'PR' | 'DO'; // default 'US'
   // Approvals

@@ -57,22 +57,7 @@ import AuthScreen from './components/AuthScreen';
 import PunchClockScreen from './components/PunchClockScreen';
 import MyHoursScreen from './components/MyHoursScreen';
 import AdminConsole from './components/AdminConsole';
-import {
-  getCurrentSessionUser,
-  syncDailyOvertimeMode,
-  syncOvertimeCalculationMode,
-  syncPublicHolidaySettings,
-} from './services/dataStore';
-import {
-  addCustomHoliday,
-  buildHolidayMapForDates,
-  fetchPublicHolidaysFromAPI,
-  getCustomHolidays,
-  HolidayCountryCode,
-  PublicHoliday,
-  removeCustomHoliday,
-  SUPPORTED_HOLIDAY_COUNTRIES,
-} from './services/holidays';
+import { getCurrentSessionUser } from './services/dataStore';
 import { AppUser, Company } from './types/timeclock';
 import { generateVectorTimesheetPDF, triggerPrintAndDownloadPDF } from './services/pdfExport';
 
@@ -295,20 +280,19 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
       endTime: '17:00',
       enabled: true,
       period: 'Bi-weekly', // Default 14 days
-      autoLunchEnabled: true,
-      autoLunchDurationMins: 30, // e.g., 30 or 60 mins
-      autoLunchMinShiftHours: 6, // shifts longer than 6 hours
-      excessiveBreakAlertEnabled: true,
-      maxBreakMinutes: 120, // alert if single-day break exceeds 120 mins
-      calculateOvertimeWeekly: true, // calculate overtime weekly (>40h/wk) by default
-      calculateDailyOvertime: false, // calculate daily overtime (>8h/day)
-      highlightPublicHolidays: true, // automatically highlight/mark public holidays in timesheet view
-      holidayCountry: 'US' as HolidayCountryCode // default country for public holidays
     };
     try {
       const saved = localStorage.getItem('shift_settings');
       if (saved) {
-        return { ...defaultSettings, ...JSON.parse(saved) };
+        const parsed = JSON.parse(saved);
+        return {
+          startTime: parsed.startTime || defaultSettings.startTime,
+          lunchStart: parsed.lunchStart || defaultSettings.lunchStart,
+          endTime: parsed.endTime || defaultSettings.endTime,
+          lunchEnd: parsed.lunchEnd || defaultSettings.lunchEnd,
+          enabled: typeof parsed.enabled === 'boolean' ? parsed.enabled : defaultSettings.enabled,
+          period: parsed.period || defaultSettings.period,
+        };
       }
       return defaultSettings;
     } catch (e) {
@@ -349,69 +333,6 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
   }, [records, todayDateStr]);
 
   const [expandedDays, setExpandedDays] = useState<number[]>([todayRecordIndex]);
-
-  // Public Holidays state (Predefined + Live Nager.Date API + Custom dates)
-  const [customHolidays, setCustomHolidays] = useState<PublicHoliday[]>(() => getCustomHolidays());
-  const [holidayApiTick, setHolidayApiTick] = useState(0);
-  const [isSyncingHolidays, setIsSyncingHolidays] = useState(false);
-  const [holidaySyncSource, setHolidaySyncSource] = useState<'predefined' | 'api'>('predefined');
-  const [newCustomHolidayDate, setNewCustomHolidayDate] = useState('');
-  const [newCustomHolidayName, setNewCustomHolidayName] = useState('');
-
-  const highlightPublicHolidays = shiftSettings.highlightPublicHolidays !== false;
-  const holidayCountry: HolidayCountryCode = (shiftSettings.holidayCountry as HolidayCountryCode) || 'US';
-
-  const syncHolidaysFromApi = useCallback(
-    async (country: HolidayCountryCode, showToast = false) => {
-      setIsSyncingHolidays(true);
-      try {
-        const years = Array.from(
-          new Set([
-            new Date().getFullYear(),
-            ...records
-              .map(r => (r.date && r.date.length >= 4 ? parseInt(r.date.slice(0, 4), 10) : NaN))
-              .filter(y => !isNaN(y)),
-          ])
-        );
-        const results = await Promise.all(
-          years.map(yr => fetchPublicHolidaysFromAPI(yr, country))
-        );
-        const anyFromApi = results.some(r => r.fromApi);
-        setHolidaySyncSource(anyFromApi ? 'api' : 'predefined');
-        setHolidayApiTick(t => t + 1);
-      } finally {
-        setIsSyncingHolidays(false);
-      }
-    },
-    [records]
-  );
-
-  useEffect(() => {
-    if (highlightPublicHolidays) {
-      syncHolidaysFromApi(holidayCountry, false);
-    }
-  }, [highlightPublicHolidays, holidayCountry, periodStart]);
-
-  const holidayMap = useMemo(() => {
-    if (!highlightPublicHolidays) return {} as Record<string, PublicHoliday>;
-    return buildHolidayMapForDates(
-      records.map(r => r.date),
-      holidayCountry,
-      customHolidays
-    );
-  }, [highlightPublicHolidays, holidayCountry, records, customHolidays, holidayApiTick]);
-
-  const periodHolidays = useMemo(() => {
-    if (!highlightPublicHolidays) return [] as Array<{ recordIndex: number; day: string; holiday: PublicHoliday }>;
-    const found: Array<{ recordIndex: number; day: string; holiday: PublicHoliday }> = [];
-    records.forEach((r, idx) => {
-      const h = holidayMap[r.date];
-      if (h) {
-        found.push({ recordIndex: idx, day: r.day, holiday: h });
-      }
-    });
-    return found;
-  }, [highlightPublicHolidays, records, holidayMap]);
 
   // Auth states
   const [user, setUser] = useState<FirebaseUser | null>(null);
@@ -520,133 +441,37 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
     return () => unsubscribe();
   }, [companyName]);
 
-  // Check whether automatic default lunch break applies to a row (shift > 6h and no lunch recorded)
-  const isAutoLunchApplied = useCallback(
-    (record: DailyRecord) => {
-      if (!shiftSettings.autoLunchEnabled) return false;
-      if (!record.timeIn || !record.timeOut) return false;
-      if (record.lunchStart || record.lunchEnd) return false;
-
-      const parseTime = (timeStr: string) => {
-        if (!timeStr) return 0;
-        const [h, m] = timeStr.split(':').map(Number);
-        return h + m / 60;
-      };
-
-      const inTime = parseTime(record.timeIn);
-      const outTime = parseTime(record.timeOut);
-      if (outTime <= inTime) return false;
-
-      const rawShiftHours = outTime - inTime;
-      const minHours = Number(shiftSettings.autoLunchMinShiftHours) || 6;
-      return rawShiftHours > minHours;
-    },
-    [
-      shiftSettings.autoLunchEnabled,
-      shiftSettings.autoLunchMinShiftHours,
-    ]
-  );
-
   // Auto-calculate row hours
-  const calculateRowHours = useCallback(
-    (record: DailyRecord) => {
-      if (!record.timeIn || !record.timeOut) return '';
+  const calculateRowHours = useCallback((record: DailyRecord) => {
+    if (!record.timeIn || !record.timeOut) return '';
 
-      const parseTime = (timeStr: string) => {
-        if (!timeStr) return 0;
-        const [h, m] = timeStr.split(':').map(Number);
-        return h + m / 60;
-      };
+    const parseTime = (timeStr: string) => {
+      if (!timeStr) return 0;
+      const [h, m] = timeStr.split(':').map(Number);
+      return h + m / 60;
+    };
 
-      const inTime = parseTime(record.timeIn);
-      const outTime = parseTime(record.timeOut);
+    const inTime = parseTime(record.timeIn);
+    const outTime = parseTime(record.timeOut);
 
-      // Time Out earlier than or equal to Time In
-      if (outTime <= inTime) {
+    // Time Out earlier than or equal to Time In
+    if (outTime <= inTime) {
+      return '0.00';
+    }
+
+    let total = outTime - inTime;
+
+    if (record.lunchStart && record.lunchEnd) {
+      const lStart = parseTime(record.lunchStart);
+      const lEnd = parseTime(record.lunchEnd);
+      if (lEnd <= lStart || lStart < inTime || lEnd > outTime) {
         return '0.00';
       }
+      total -= lEnd - lStart;
+    }
 
-      let total = outTime - inTime;
-
-      if (record.lunchStart && record.lunchEnd) {
-        const lStart = parseTime(record.lunchStart);
-        const lEnd = parseTime(record.lunchEnd);
-        if (lEnd <= lStart || lStart < inTime || lEnd > outTime) {
-          return '0.00';
-        }
-        total -= lEnd - lStart;
-      } else if (shiftSettings.autoLunchEnabled && !record.lunchStart && !record.lunchEnd) {
-        const minHours = Number(shiftSettings.autoLunchMinShiftHours) || 6;
-        const deductMins = Number(shiftSettings.autoLunchDurationMins) || 30;
-        if (total > minHours && deductMins > 0) {
-          total = Math.max(0, total - deductMins / 60);
-        }
-      }
-
-      return total > 0 ? total.toFixed(2) : '0.00';
-    },
-    [
-      shiftSettings.autoLunchEnabled,
-      shiftSettings.autoLunchDurationMins,
-      shiftSettings.autoLunchMinShiftHours,
-    ]
-  );
-
-  // Populate default lunch start/end times onto any shift > threshold with no lunch recorded
-  const populateDefaultLunchCells = useCallback(
-    (durationMinsOverride?: number) => {
-      const durationMins = durationMinsOverride ?? (Number(shiftSettings.autoLunchDurationMins) || 30);
-      const minHours = Number(shiftSettings.autoLunchMinShiftHours) || 6;
-      const parseMins = (t: string) => {
-        if (!t || !t.includes(':')) return null;
-        const [h, m] = t.split(':').map(Number);
-        return isNaN(h) || isNaN(m) ? null : h * 60 + m;
-      };
-      const formatMins = (totalMins: number) => {
-        const clamped = ((totalMins % 1440) + 1440) % 1440;
-        const hh = String(Math.floor(clamped / 60)).padStart(2, '0');
-        const mm = String(clamped % 60).padStart(2, '0');
-        return `${hh}:${mm}`;
-      };
-
-      let count = 0;
-      const updated = records.map(r => {
-        if (!r.timeIn || !r.timeOut || r.lunchStart || r.lunchEnd) return r;
-        const inM = parseMins(r.timeIn);
-        const outM = parseMins(r.timeOut);
-        if (inM === null || outM === null || outM <= inM) return r;
-        const shiftHrs = (outM - inM) / 60;
-        if (shiftHrs <= minHours) return r;
-
-        const prefStart = parseMins(shiftSettings.lunchStart || '12:00') ?? 720;
-        const lStartMins =
-          prefStart > inM && prefStart + durationMins < outM
-            ? prefStart
-            : Math.round((inM + (outM - inM) / 2 - durationMins / 2) / 5) * 5;
-        const lEndMins = lStartMins + durationMins;
-        count++;
-        const nextRec = {
-          ...r,
-          lunchStart: formatMins(lStartMins),
-          lunchEnd: formatMins(lEndMins),
-        };
-        nextRec.totalHours = calculateRowHours(nextRec);
-        return nextRec;
-      });
-
-      if (count > 0) {
-        setRecords(updated);
-      }
-      return count;
-    },
-    [
-      records,
-      shiftSettings.autoLunchDurationMins,
-      shiftSettings.autoLunchMinShiftHours,
-      shiftSettings.lunchStart,
-      calculateRowHours,
-    ]
-  );
+    return total > 0 ? total.toFixed(2) : '0.00';
+  }, []);
 
   // Auto-calculate weekly total hours
   useEffect(() => {
@@ -991,10 +816,6 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
       if (tIn !== null && tOut !== null && (lEnd - lStart) >= (tOut - tIn)) {
         return 'Lunch duration exceeds shift duration';
       }
-      const maxBreakLimit = Number(shiftSettings.maxBreakMinutes) || 120;
-      if (shiftSettings.excessiveBreakAlertEnabled !== false && (lEnd - lStart) > maxBreakLimit) {
-        return `Break time is ${lEnd - lStart} mins (exceeds ${maxBreakLimit}-min daily limit — check data entry)`;
-      }
     }
 
     return null;
@@ -1276,45 +1097,31 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
     return records.filter(r => r.timeIn || r.timeOut || (r.totalHours && parseFloat(r.totalHours) > 0)).length;
   }, [records]);
 
-  // Calculate overtime (Daily >8h/day when enabled, plus Weekly >40h/wk by default or Per-period >40h/period) & 40-hour weekly target progress
+  // Calculate overtime (Phase 1 rule: >40h per 7-day workweek) & 40-hour weekly target progress
   const numericTotalHours = useMemo(() => parseFloat(totalHours || '0') || 0, [totalHours]);
-  const isWeeklyOvertimeMode = shiftSettings.calculateOvertimeWeekly !== false;
-  const isDailyOvertimeMode = Boolean(shiftSettings.calculateDailyOvertime);
 
   const { regularPeriodHours, overtimePeriodHours } = useMemo(() => {
-    const bucketSize = isWeeklyOvertimeMode ? 7 : Math.max(1, records.length);
+    const bucketSize = 7;
     let regSum = 0;
     let otSum = 0;
 
     for (let i = 0; i < records.length; i += bucketSize) {
       const bucketSlice = records.slice(i, i + bucketSize);
-      let bucketRegCandidates = 0;
-      let bucketDailyOt = 0;
+      let bucketHours = 0;
 
       for (const r of bucketSlice) {
-        const dayHrs = parseFloat(r.totalHours || '0') || 0;
-        if (isDailyOvertimeMode) {
-          const dayReg = Math.min(8, dayHrs);
-          const dayOt = Math.max(0, dayHrs - 8);
-          bucketRegCandidates += dayReg;
-          bucketDailyOt += dayOt;
-        } else {
-          bucketRegCandidates += dayHrs;
-        }
+        bucketHours += parseFloat(r.totalHours || '0') || 0;
       }
 
-      const bucketReg = Math.min(40, bucketRegCandidates);
-      const bucketThresholdOt = Math.max(0, bucketRegCandidates - 40);
-
-      regSum += bucketReg;
-      otSum += bucketDailyOt + bucketThresholdOt;
+      regSum += Math.min(40, bucketHours);
+      otSum += Math.max(0, bucketHours - 40);
     }
 
     return {
       regularPeriodHours: regSum,
       overtimePeriodHours: otSum,
     };
-  }, [isDailyOvertimeMode, isWeeklyOvertimeMode, records]);
+  }, [records]);
 
   const isOvertimePeriod = overtimePeriodHours > 0;
 
@@ -1341,356 +1148,65 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
     };
   }, [records]);
 
-  // Alert system for single-day break time exceeding 120 minutes (or configured maxBreakMinutes)
-  const notifiedExcessiveBreakKeysRef = useRef<Set<string>>(new Set());
-  const [dismissedBreakAlertKeys, setDismissedBreakAlertKeys] = useState<string[]>([]);
-
-  const excessiveBreakAlerts = useMemo(() => {
-    if (shiftSettings.excessiveBreakAlertEnabled === false) return [];
-    const maxBreakMins = Number(shiftSettings.maxBreakMinutes) || 120;
-    const parseTimeToMins = (t: string): number | null => {
-      if (!t || !t.includes(':')) return null;
-      const [h, m] = t.split(':').map(Number);
-      if (isNaN(h) || isNaN(m)) return null;
-      return h * 60 + m;
-    };
-
-    const list: {
-      recordIndex: number;
-      dayLabel: string;
-      dateStr: string;
-      lunchStart: string;
-      lunchEnd: string;
-      breakMinutes: number;
-      alertKey: string;
-    }[] = [];
-
-    records.forEach((rec, idx) => {
-      const lStart = parseTimeToMins(rec.lunchStart);
-      const lEnd = parseTimeToMins(rec.lunchEnd);
-      if (lStart !== null && lEnd !== null && lEnd > lStart) {
-        const breakMins = lEnd - lStart;
-        if (breakMins > maxBreakMins) {
-          const alertKey = `${rec.date || idx}-${rec.lunchStart}-${rec.lunchEnd}-${maxBreakMins}`;
-          if (!dismissedBreakAlertKeys.includes(alertKey)) {
-            list.push({
-              recordIndex: idx,
-              dayLabel: rec.day,
-              dateStr: rec.date || `Day ${idx + 1}`,
-              lunchStart: rec.lunchStart,
-              lunchEnd: rec.lunchEnd,
-              breakMinutes: breakMins,
-              alertKey,
-            });
-          }
-        }
-      }
-    });
-
-    return list;
-  }, [records, shiftSettings.excessiveBreakAlertEnabled, shiftSettings.maxBreakMinutes, dismissedBreakAlertKeys]);
-
-  useEffect(() => {
-    if (!shiftSettings.excessiveBreakAlertEnabled || excessiveBreakAlerts.length === 0) return;
-    const first = excessiveBreakAlerts[0];
-    if (!notifiedExcessiveBreakKeysRef.current.has(first.alertKey)) {
-      notifiedExcessiveBreakKeysRef.current.add(first.alertKey);
-      const maxBreakMins = Number(shiftSettings.maxBreakMinutes) || 120;
-      const title = `Break Time Alert — Exceeds ${maxBreakMins} Minutes`;
-      const body = `${first.dayLabel} (${first.dateStr}) has a recorded break of ${first.breakMinutes} mins (${(
-        first.breakMinutes / 60
-      ).toFixed(2)} hrs: ${first.lunchStart} – ${first.lunchEnd}), exceeding the ${maxBreakMins}-minute daily break limit.`;
-
-      if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
-        try {
-          new Notification(title, {
-            body,
-            tag: `excessive-break-${first.alertKey}`,
-          });
-        } catch {}
-      }
-    }
-  }, [excessiveBreakAlerts, shiftSettings.excessiveBreakAlertEnabled, shiftSettings.maxBreakMinutes]);
-
-  // Browser notification system for working 5 consecutive hours without a lunch break based on shiftSettings
-  const notifiedLunchKeysRef = useRef<Set<string>>(new Set());
-  const [lunchBreakAlert, setLunchBreakAlert] = useState<{
-    recordIndex: number;
-    dayLabel: string;
-    dateStr: string;
-    consecutiveHours: number;
-  } | null>(null);
-
-  const checkFiveConsecutiveHoursWithoutLunch = useCallback(() => {
-    if (!shiftSettings.enabled) {
-      setLunchBreakAlert(null);
-      return;
-    }
-
-    const parseTimeToMins = (t: string): number | null => {
-      if (!t || !t.includes(':')) return null;
-      const [h, m] = t.split(':').map(Number);
-      if (isNaN(h) || isNaN(m)) return null;
-      return h * 60 + m;
-    };
-
-    const now = new Date();
-    const nowMins = now.getHours() * 60 + now.getMinutes();
-    const currentTodayStr = getTodayDate();
-    const schedStartMins = parseTimeToMins(shiftSettings.startTime);
-
-    let detectedAlert: {
-      recordIndex: number;
-      dayLabel: string;
-      dateStr: string;
-      consecutiveHours: number;
-      alertKey: string;
-    } | null = null;
-
-    for (let idx = 0; idx < records.length; idx++) {
-      const rec = records[idx];
-      const hasLunchEntered = Boolean(rec.lunchStart && rec.lunchStart.trim() !== '') && Boolean(rec.lunchEnd && rec.lunchEnd.trim() !== '');
-      if (hasLunchEntered) continue;
-
-      const inMins = parseTimeToMins(rec.timeIn);
-      const outMins = parseTimeToMins(rec.timeOut);
-
-      // 1) Completed or entered shift with >= 5 consecutive hours (300 mins) and no lunch break entered
-      if (inMins !== null && outMins !== null && outMins > inMins) {
-        const workedMins = outMins - inMins;
-        if (workedMins >= 300) {
-          const hrs = workedMins / 60;
-          detectedAlert = {
-            recordIndex: idx,
-            dayLabel: rec.day,
-            dateStr: rec.date || `Day ${idx + 1}`,
-            consecutiveHours: hrs,
-            alertKey: `${rec.date || idx}-${rec.timeIn}-${rec.timeOut}-nolunch`,
-          };
-          break;
-        }
-      }
-
-      // 2) Active shift on today's row (clocked in or shiftSettings startTime elapsed >= 5 hours without lunchStart)
-      if (rec.date === currentTodayStr && !rec.lunchStart) {
-        const effectiveStartMins = inMins !== null ? inMins : null;
-        if (effectiveStartMins !== null && outMins === null) {
-          const elapsedMins = nowMins - effectiveStartMins;
-          if (elapsedMins >= 300) {
-            const hrs = elapsedMins / 60;
-            detectedAlert = {
-              recordIndex: idx,
-              dayLabel: rec.day,
-              dateStr: rec.date,
-              consecutiveHours: hrs,
-              alertKey: `${rec.date}-${rec.timeIn}-active-5h`,
-            };
-            break;
-          }
-        } else if (
-          inMins !== null &&
-          schedStartMins !== null &&
-          nowMins - schedStartMins >= 300 &&
-          outMins === null
-        ) {
-          const hrs = (nowMins - schedStartMins) / 60;
-          detectedAlert = {
-            recordIndex: idx,
-            dayLabel: rec.day,
-            dateStr: rec.date,
-            consecutiveHours: hrs,
-            alertKey: `${rec.date}-sched-${shiftSettings.startTime}-5h`,
-          };
-          break;
-        }
-      }
-    }
-
-    if (detectedAlert) {
-      setLunchBreakAlert({
-        recordIndex: detectedAlert.recordIndex,
-        dayLabel: detectedAlert.dayLabel,
-        dateStr: detectedAlert.dateStr,
-        consecutiveHours: detectedAlert.consecutiveHours,
-      });
-
-      if (!notifiedLunchKeysRef.current.has(detectedAlert.alertKey)) {
-        notifiedLunchKeysRef.current.add(detectedAlert.alertKey);
-        const title = 'Lunch Break Reminder — 5+ Consecutive Hours';
-        const body = `You have worked ${detectedAlert.consecutiveHours.toFixed(2)} consecutive hours on ${detectedAlert.dayLabel} (${detectedAlert.dateStr}) without entering a lunch break. Scheduled lunch: ${shiftSettings.lunchStart || '12:00'} – ${shiftSettings.lunchEnd || '13:00'}.`;
-
-        if (typeof window !== 'undefined' && 'Notification' in window) {
-          if (Notification.permission === 'granted') {
-            try {
-              new Notification(title, {
-                body,
-                tag: `lunch-alert-${detectedAlert.alertKey}`,
-              });
-            } catch (e) {
-              console.warn('Browser notification dispatch failed:', e);
-            }
-          } else if (Notification.permission === 'default') {
-            Notification.requestPermission()
-              .then(perm => {
-                if (perm === 'granted') {
-                  try {
-                    new Notification(title, {
-                      body,
-                      tag: `lunch-alert-${detectedAlert!.alertKey}`,
-                    });
-                  } catch {}
-                }
-              })
-              .catch(() => {});
-          }
-        }
-      }
-    } else {
-      setLunchBreakAlert(null);
-    }
-  }, [records, shiftSettings]);
-
-  useEffect(() => {
-    checkFiveConsecutiveHoursWithoutLunch();
-    if (!shiftSettings.enabled) return;
-    const intervalId = window.setInterval(checkFiveConsecutiveHoursWithoutLunch, 30000);
-    return () => window.clearInterval(intervalId);
-  }, [checkFiveConsecutiveHoursWithoutLunch, shiftSettings.enabled]);
-
   const periodRangeLabel = useMemo(() => {
     return formatPeriodRange(periodStart, shiftSettings.period);
   }, [periodStart, shiftSettings.period]);
 
-  const filteredHistory = Object.entries(historyData)
-    .filter(([week, data]) => {
-      const term = historySearchTerm.toLowerCase();
-      if (!term) return true;
-      if (week.toLowerCase().includes(term)) return true;
-      if (data.name && data.name.toLowerCase().includes(term)) return true;
-      return false;
-    })
-    .sort((a, b) => b[0].localeCompare(a[0]));
+  const totalHistoryCount = Object.keys(historyData).length;
+
+  const highlightMatch = useCallback((text: string, query: string): React.ReactNode => {
+    const trimmed = query.trim();
+    if (!trimmed || !text) return text;
+    const escaped = trimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const parts = String(text).split(new RegExp(`(${escaped})`, 'gi'));
+    return parts.map((part, idx) =>
+      part.toLowerCase() === trimmed.toLowerCase() ? (
+        <mark
+          key={idx}
+          className="bg-amber-200 dark:bg-amber-500/40 text-gray-900 dark:text-white rounded px-0.5 font-extrabold"
+        >
+          {part}
+        </mark>
+      ) : (
+        part
+      )
+    );
+  }, []);
+
+  const filteredHistory = useMemo(() => {
+    const term = historySearchTerm.trim().toLowerCase();
+    return Object.entries(historyData)
+      .filter(([week, data]) => {
+        if (!term) return true;
+        const periodLabel = String(data.weekOf || data.periodStart || week).toLowerCase();
+        const totalHrs = (
+          data.records?.reduce((acc: number, r: any) => acc + (parseFloat(r.totalHours) || 0), 0).toFixed(2) || '0.00'
+        ).toLowerCase();
+        const nameMatch = data.name && String(data.name).toLowerCase().includes(term);
+        const dateMatch = data.date && String(data.date).toLowerCase().includes(term);
+        const notesMatch =
+          Array.isArray(data.records) &&
+          data.records.some(
+            (r: any) =>
+              (r.notes && String(r.notes).toLowerCase().includes(term)) ||
+              (r.date && String(r.date).toLowerCase().includes(term)) ||
+              (r.day && String(r.day).toLowerCase().includes(term))
+          );
+        return (
+           week.toLowerCase().includes(term) ||
+          periodLabel.includes(term) ||
+          Boolean(nameMatch) ||
+          Boolean(dateMatch) ||
+          totalHrs.includes(term) ||
+          Boolean(notesMatch)
+        );
+      })
+      .sort((a, b) => b[0].localeCompare(a[0]));
+  }, [historyData, historySearchTerm]);
 
   return (
     <main className="min-h-screen bg-gray-50 dark:bg-[#0b0f19] text-gray-900 dark:text-gray-100 py-3 sm:py-6 px-2.5 sm:px-5 lg:px-8 pb-28 md:pb-12 print:bg-white pdf:bg-white print:p-0 pdf:p-0">
       <div id="timesheet-content" className="max-w-7xl print:max-w-full pdf:max-w-full mx-auto space-y-4 sm:space-y-6">
-
-        {/* 5-Consecutive-Hours No-Lunch Browser Notification Alert Banner */}
-        {shiftSettings.enabled && lunchBreakAlert && (
-          <div
-            role="alert"
-            className="bg-amber-50 dark:bg-amber-950/60 border border-amber-300 dark:border-amber-700/80 rounded-2xl p-3.5 sm:p-4 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3 print:hidden pdf:hidden"
-          >
-            <div className="flex items-start gap-2.5">
-              <Utensils className="w-5 h-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
-              <div className="text-xs sm:text-sm text-amber-900 dark:text-amber-100">
-                <span className="font-extrabold">Lunch Break Alert (5+ Consecutive Hours): </span>
-                <span>
-                  You have worked <strong>{lunchBreakAlert.consecutiveHours.toFixed(2)} hrs</strong> on{' '}
-                  <strong>{lunchBreakAlert.dayLabel} ({lunchBreakAlert.dateStr})</strong> without entering a lunch break time
-                  (Shift setting: {shiftSettings.lunchStart} – {shiftSettings.lunchEnd}).
-                </span>
-              </div>
-            </div>
-            <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
-              <button
-                type="button"
-                onClick={() => {
-                  const idx = lunchBreakAlert.recordIndex;
-                  const updated = [...records];
-                  if (updated[idx]) {
-                    updated[idx] = {
-                      ...updated[idx],
-                      lunchStart: shiftSettings.lunchStart || '12:00',
-                      lunchEnd: shiftSettings.lunchEnd || '13:00',
-                    };
-                    setRecords(updated);
-                  }
-                }}
-                className="px-3 py-1.5 text-xs font-bold bg-amber-600 hover:bg-amber-700 text-white rounded-xl transition-colors"
-              >
-                Enter Lunch ({shiftSettings.lunchStart}–{shiftSettings.lunchEnd})
-              </button>
-              <button
-                type="button"
-                onClick={() => setLunchBreakAlert(null)}
-                className="p-1.5 text-amber-700 dark:text-amber-300 hover:bg-amber-100 dark:hover:bg-amber-900/40 rounded-lg"
-                aria-label="Dismiss lunch alert"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* Excessive Daily Break (> 120 Minutes) Quality-of-Life Data Entry Alert Banner */}
-        {shiftSettings.excessiveBreakAlertEnabled !== false && excessiveBreakAlerts.length > 0 && (
-          <div
-            role="alert"
-            className="bg-rose-50 dark:bg-rose-950/60 border border-rose-300 dark:border-rose-700/80 rounded-2xl p-3.5 sm:p-4 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3 print:hidden pdf:hidden"
-          >
-            <div className="flex items-start gap-2.5">
-              <AlertTriangle className="w-5 h-5 text-rose-600 dark:text-rose-400 shrink-0 mt-0.5" />
-              <div className="text-xs sm:text-sm text-rose-900 dark:text-rose-100">
-                <span className="font-extrabold">
-                  Break Duration Alert (&gt;{shiftSettings.maxBreakMinutes || 120} Mins):{' '}
-                </span>
-                <span>
-                  <strong>
-                    {excessiveBreakAlerts[0].dayLabel} ({excessiveBreakAlerts[0].dateStr})
-                  </strong>{' '}
-                  has a recorded break of{' '}
-                  <strong className="underline decoration-rose-400">
-                    {excessiveBreakAlerts[0].breakMinutes} mins (
-                    {(excessiveBreakAlerts[0].breakMinutes / 60).toFixed(2)} hrs)
-                  </strong>{' '}
-                  from <strong>{excessiveBreakAlerts[0].lunchStart}</strong> to{' '}
-                  <strong>{excessiveBreakAlerts[0].lunchEnd}</strong>. Please verify this isn&apos;t a data entry or AM/PM error.
-                  {excessiveBreakAlerts.length > 1 && (
-                    <span className="ml-1 font-bold">
-                      (+{excessiveBreakAlerts.length - 1} more day{excessiveBreakAlerts.length > 2 ? 's' : ''})
-                    </span>
-                  )}
-                </span>
-              </div>
-            </div>
-            <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
-              <button
-                type="button"
-                onClick={() => {
-                  const idx = excessiveBreakAlerts[0].recordIndex;
-                  const updated = [...records];
-                  if (updated[idx]) {
-                    updated[idx] = {
-                      ...updated[idx],
-                      lunchStart: shiftSettings.lunchStart || '12:00',
-                      lunchEnd: shiftSettings.lunchEnd || '13:00',
-                    };
-                    updated[idx].totalHours = calculateRowHours(updated[idx]);
-                    setRecords(updated);
-                    showNotice(
-                      'success',
-                      `Reset ${updated[idx].day} lunch break to ${shiftSettings.lunchStart || '12:00'}–${shiftSettings.lunchEnd || '13:00'}.`
-                    );
-                  }
-                }}
-                className="px-3 py-1.5 text-xs font-bold bg-rose-600 hover:bg-rose-700 text-white rounded-xl transition-colors whitespace-nowrap"
-              >
-                Reset to {shiftSettings.lunchStart || '12:00'}–{shiftSettings.lunchEnd || '13:00'}
-              </button>
-              <button
-                type="button"
-                onClick={() =>
-                  setDismissedBreakAlertKeys(prev => [...prev, excessiveBreakAlerts[0].alertKey])
-                }
-                className="p-1.5 text-rose-700 dark:text-rose-300 hover:bg-rose-100 dark:hover:bg-rose-900/40 rounded-lg"
-                aria-label="Dismiss excessive break alert"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-          </div>
-        )}
 
         {/* In-App PDF / Validation Notice Banner */}
         {actionNotice && (
@@ -1823,20 +1339,6 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
                 </span>
               </div>
             )}
-
-            {/* Demoted Business Login (Part A2) */}
-            <div className="flex flex-col items-start sm:items-end shrink-0">
-              <button
-                onClick={onOpenBusinessLogin}
-                className="inline-flex items-center gap-1.5 text-xs font-semibold text-indigo-600 dark:text-indigo-400 hover:text-indigo-700 dark:hover:text-indigo-300 px-2.5 py-1 rounded-lg bg-indigo-50/70 dark:bg-indigo-950/40 hover:bg-indigo-100/80 dark:hover:bg-slate-800 transition-colors whitespace-nowrap"
-              >
-                <User className="w-3.5 h-3.5 shrink-0" />
-                <span>Business Login</span>
-              </button>
-              <p className="text-[10px] text-gray-400 dark:text-slate-500 text-left sm:text-right leading-tight mt-0.5 whitespace-nowrap">
-                Login adds sync + history. Sheet works without it.
-              </p>
-            </div>
 
             {/* Desktop Actions: Manager Email, Print, Send */}
             <div className="hidden md:flex items-center gap-2 shrink-0">
@@ -2287,7 +1789,6 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
                 const errors = getErrors(record);
                 const outOfRange = isDateOutOfRange(record.date);
                 const dayWarning = getDayValidationWarning(record);
-                const holiday = holidayMap[record.date];
 
                 return (
                   <div
@@ -2300,8 +1801,6 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
                         ? 'border-2 border-indigo-600 dark:border-indigo-500 ring-2 ring-indigo-500/20'
                         : dayWarning
                         ? 'border-2 border-amber-300 dark:border-amber-600/80'
-                        : holiday
-                        ? 'border-2 border-violet-300 dark:border-violet-700 bg-violet-50/15 dark:bg-violet-950/15'
                         : 'border border-gray-200/90 dark:border-slate-700/80'
                     }`}
                   >
@@ -2338,21 +1837,6 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
                         {isToday && (
                           <span className="bg-indigo-600 text-white text-[11px] font-extrabold px-2 py-0.5 rounded-full uppercase tracking-wider">
                             Today
-                          </span>
-                        )}
-                        {holiday && (
-                          <span
-                            title={`Public Holiday: ${holiday.name}`}
-                            className="inline-flex items-center gap-1 text-[10px] font-extrabold text-violet-800 dark:text-violet-200 bg-violet-100 dark:bg-violet-950/80 border border-violet-300 dark:border-violet-700 px-2 py-0.5 rounded-full"
-                          >
-                            <Calendar className="w-2.5 h-2.5 text-violet-600 dark:text-violet-400 shrink-0" />
-                            <span>{holiday.name}</span>
-                          </span>
-                        )}
-                        {isAutoLunchApplied(record) && (
-                          <span className="text-[10px] font-bold text-amber-800 dark:text-amber-200 bg-[#FEF9C3] dark:bg-amber-950/60 border border-amber-300 dark:border-amber-700 px-1.5 py-0.5 rounded-md flex items-center gap-1">
-                            <Utensils className="w-2.5 h-2.5" />
-                            <span>Auto -{shiftSettings.autoLunchDurationMins || 30}m lunch</span>
                           </span>
                         )}
                         {outOfRange && (
@@ -2745,11 +2229,6 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
                   const isToday = record.date === todayDateStr;
                   const outOfRange = isDateOutOfRange(record.date);
                   const dayWarning = getDayValidationWarning(record);
-                  const holiday = holidayMap[record.date];
-
-                  const dayNumericHours = parseFloat(record.totalHours || '0') || 0;
-                  const dailyOtForRow =
-                    isDailyOvertimeMode && dayNumericHours > 8 ? dayNumericHours - 8 : 0;
 
                   return (
                     <tr
@@ -2757,8 +2236,6 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
                       className={`group hover:bg-gray-50/60 dark:hover:bg-slate-800/40 transition-all ${
                         isToday
                           ? 'today-row-glow bg-indigo-50/40 dark:bg-indigo-950/30'
-                          : holiday
-                          ? 'bg-violet-50/35 dark:bg-violet-950/20'
                           : ''
                       }`}
                     >
@@ -2767,8 +2244,6 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
                         className={`px-2.5 lg:px-3 py-2.5 align-middle ${
                           isToday
                             ? 'bg-indigo-50/45 dark:bg-indigo-950/35 border-l-4 border-l-indigo-600 dark:border-l-indigo-400 print:bg-white print:border-l-0'
-                            : holiday
-                            ? 'bg-violet-50/45 dark:bg-violet-950/25 border-l-4 border-l-violet-500 dark:border-l-violet-400 print:bg-white print:border-l-0'
                             : 'bg-white dark:bg-slate-900'
                         }`}
                       >
@@ -2842,35 +2317,6 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
                             aria-label={`Date for ${record.day}`}
                           />
                         </label>
-                        {holiday && (
-                          <div className="mt-1 flex items-center gap-1 flex-wrap">
-                            <span
-                              title={`Public Holiday: ${holiday.name}`}
-                              className="inline-flex items-center gap-1 text-[10px] font-extrabold bg-violet-100 dark:bg-violet-950/80 text-violet-800 dark:text-violet-200 border border-violet-300 dark:border-violet-700 px-1.5 py-0.5 rounded-md max-w-full truncate"
-                            >
-                              <Calendar className="w-2.5 h-2.5 text-violet-600 dark:text-violet-400 shrink-0" />
-                              <span className="truncate">{holiday.name}</span>
-                            </span>
-                            {!record.notes?.includes(holiday.name) && (
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  handleRecordChange(
-                                    index,
-                                    'notes',
-                                    record.notes
-                                      ? `${record.notes} • Holiday: ${holiday.name}`
-                                      : `Public Holiday — ${holiday.name}`
-                                  )
-                                }
-                                className="text-[9px] font-bold text-violet-700 dark:text-violet-300 underline opacity-0 group-hover:opacity-100 transition-opacity print:hidden pdf:hidden"
-                                title="Add holiday note to this row"
-                              >
-                                +Note
-                              </button>
-                            )}
-                          </div>
-                        )}
                         {outOfRange && (
                           <div className="text-[10px] text-amber-600 flex items-center gap-0.5 print:hidden pdf:hidden">
                             <AlertTriangle className="w-3 h-3" />
@@ -3010,22 +2456,6 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
                           {!dayWarning && record.totalHours && parseFloat(record.totalHours) > 0 && (
                             <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-medium leading-tight print:hidden pdf:hidden flex items-center gap-0.5">
                               <Check className="w-2.5 h-2.5" /> Valid
-                            </span>
-                          )}
-                          {isAutoLunchApplied(record) && (
-                            <span
-                              className="mt-0.5 px-1.5 py-0.2 rounded bg-[#FEF9C3] dark:bg-amber-950/60 border border-amber-300 dark:border-amber-700 text-[9px] font-bold text-amber-900 dark:text-amber-200 leading-tight print:hidden pdf:hidden"
-                              title={`Automatically deducted ${shiftSettings.autoLunchDurationMins || 30} mins default lunch break for shift > ${shiftSettings.autoLunchMinShiftHours || 6} hrs`}
-                            >
-                              Auto -{shiftSettings.autoLunchDurationMins || 30}m lunch
-                            </span>
-                          )}
-                          {dailyOtForRow > 0 && (
-                            <span
-                              className="mt-0.5 px-1.5 py-0.2 rounded bg-rose-100 dark:bg-rose-950/70 border border-rose-300 dark:border-rose-700 text-[9px] font-extrabold text-rose-700 dark:text-rose-300 leading-tight print:hidden pdf:hidden"
-                              title={`Daily Overtime: ${dailyOtForRow.toFixed(2)} hrs worked beyond 8 hours in a single day`}
-                            >
-                              +{dailyOtForRow.toFixed(2)}h Daily OT
                             </span>
                           )}
                         </div>
@@ -3263,8 +2693,7 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
               <div className="grid grid-cols-2 gap-3 print:gap-2 pt-1 print:pt-0">
                 <div className="p-3 print:p-2 rounded-xl border border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-900/60">
                   <div className="text-[11px] print:text-[9px] font-bold uppercase tracking-wider text-gray-500 dark:text-slate-400">
-                    Regular Hours ({isDailyOvertimeMode ? '≤8/day, ' : ''}
-                    {isWeeklyOvertimeMode ? '≤40/wk' : '≤40/period'})
+                    Regular Hours (≤40/wk)
                   </div>
                   <div className="text-lg print:text-sm font-black font-mono text-gray-900 dark:text-white mt-0.5">
                     {regularPeriodHours.toFixed(2)} <span className="text-xs print:text-[10px] font-semibold text-gray-400">hrs</span>
@@ -3287,8 +2716,7 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
                   >
                     {isOvertimePeriod && <AlertTriangle className="w-3 h-3 text-rose-600 dark:text-rose-400 shrink-0" />}
                     <span>
-                      Overtime ({isDailyOvertimeMode ? '>8/day, ' : ''}
-                      {isWeeklyOvertimeMode ? '>40/wk' : '>40/period'})
+                      Overtime (&gt;40/wk)
                     </span>
                   </div>
                   <div
@@ -3408,22 +2836,31 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
           ========================================================================= */}
       {isSettingsOpen && (
         <div
-          className="fixed inset-0 bg-black/50 dark:bg-slate-950/80 backdrop-blur-sm flex items-center justify-center z-50 p-4"
+          className="fixed inset-0 bg-black/55 dark:bg-slate-950/80 backdrop-blur-sm flex items-center justify-center z-50 p-3 sm:p-4"
           onClick={() => setIsSettingsOpen(false)}
         >
           <div
-            className="bg-white dark:bg-slate-900 rounded-3xl shadow-2xl max-w-md w-full max-h-[90vh] flex flex-col border border-gray-200 dark:border-slate-800 overflow-hidden"
+            className="bg-white dark:bg-slate-900 rounded-3xl shadow-2xl max-w-lg w-full max-h-[90vh] flex flex-col border border-gray-200/90 dark:border-slate-800 overflow-hidden"
             onClick={e => e.stopPropagation()}
           >
             {/* Modal Header */}
-            <div className="flex items-center justify-between p-5 border-b border-gray-100 dark:border-slate-800">
-              <h3 className="text-lg font-bold text-gray-900 dark:text-white flex items-center gap-2">
-                <Settings className="w-5 h-5 text-indigo-600" />
-                <span>Settings</span>
-              </h3>
+            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 dark:border-slate-800 bg-gradient-to-r from-indigo-50/60 via-white to-white dark:from-slate-800/70 dark:via-slate-900 dark:to-slate-900">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-indigo-600 text-white flex items-center justify-center shadow-sm shrink-0">
+                  <Settings className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base sm:text-lg font-bold text-gray-900 dark:text-white leading-tight">
+                    Settings
+                  </h3>
+                  <p className="text-xs text-gray-500 dark:text-slate-400">
+                    Workspace access, display preferences &amp; shift defaults
+                  </p>
+                </div>
+              </div>
               <button
                 onClick={() => setIsSettingsOpen(false)}
-                className="w-10 h-10 flex items-center justify-center text-gray-400 hover:text-gray-600 dark:hover:text-slate-200 hover:bg-gray-100 dark:hover:bg-slate-800 rounded-xl"
+                className="w-10 h-10 flex items-center justify-center text-gray-400 hover:text-gray-600 dark:hover:text-slate-200 hover:bg-gray-100 dark:hover:bg-slate-800 rounded-xl transition-colors"
                 aria-label="Close"
               >
                 <X className="w-5 h-5" />
@@ -3431,33 +2868,110 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
             </div>
 
             {/* Modal Body */}
-            <div className="p-5 overflow-y-auto space-y-6">
-              
+            <div className="p-5 overflow-y-auto space-y-5">
+
+              {/* Business Login & Workspace Portal (Moved from Header) */}
+              <div className="p-4 rounded-2xl bg-gradient-to-br from-indigo-50/90 via-indigo-50/40 to-white dark:from-indigo-950/40 dark:via-slate-800/60 dark:to-slate-900 border border-indigo-200/80 dark:border-indigo-900/60 shadow-xs">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex items-start gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-indigo-600/10 dark:bg-indigo-500/20 text-indigo-600 dark:text-indigo-400 flex items-center justify-center shrink-0 mt-0.5">
+                      <User className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <h4 className="text-sm font-bold text-gray-900 dark:text-white">
+                          Business Account &amp; Portal
+                        </h4>
+                        <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-md bg-indigo-100 dark:bg-indigo-900/50 text-indigo-700 dark:text-indigo-300">
+                          Optional
+                        </span>
+                      </div>
+                      <p className="text-xs text-gray-600 dark:text-slate-300 mt-1 leading-relaxed">
+                        Login adds sync + history. Sheet works without it. Sign in to access the Admin Console, Web Punch Clock, and My Hours.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+                <div className="mt-3.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsSettingsOpen(false);
+                      onOpenBusinessLogin();
+                    }}
+                    className="w-full min-h-[44px] px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs sm:text-sm font-bold shadow-xs flex items-center justify-between transition-all active:scale-[0.99]"
+                  >
+                    <span className="flex items-center gap-2">
+                      <LogIn className="w-4 h-4" />
+                      <span>Business Login</span>
+                    </span>
+                    <span className="inline-flex items-center gap-1 text-xs font-semibold text-indigo-100">
+                      <span>Open Portal</span>
+                      <ChevronRight className="w-4 h-4" />
+                    </span>
+                  </button>
+                </div>
+              </div>
+
               {/* Theme Switch - THE EXCLUSIVE HOME FOR THEME TOGGLE */}
-              <div>
-                <h4 className="text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-slate-400 mb-2.5">
-                  Appearance
-                </h4>
-                <button
-                  type="button"
-                  onClick={() => setIsDarkMode(!isDarkMode)}
-                  className="w-full min-h-[48px] px-4 py-3 bg-gray-50 dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-2xl flex items-center justify-between text-sm font-bold text-gray-800 dark:text-slate-100 active:scale-98"
-                >
-                  <span className="flex items-center gap-2.5">
-                    {isDarkMode ? <Moon className="w-4 h-4 text-indigo-400" /> : <Sun className="w-4 h-4 text-amber-500" />}
-                    <span>Theme: {isDarkMode ? 'Dark Mode' : 'Light Mode'}</span>
-                  </span>
-                  <span className="text-xs font-bold text-indigo-600 dark:text-indigo-400">
-                    Switch
-                  </span>
-                </button>
+              <div className="p-4 rounded-2xl bg-gray-50/80 dark:bg-slate-800/50 border border-gray-200/80 dark:border-slate-800 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h4 className="text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-slate-400">
+                      Appearance
+                    </h4>
+                    <p className="text-xs text-gray-500 dark:text-slate-400 mt-0.5">
+                      Choose your preferred interface theme
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setIsDarkMode(!isDarkMode)}
+                    className="text-xs font-bold text-indigo-600 dark:text-indigo-400 hover:underline"
+                  >
+                    Theme: {isDarkMode ? 'Dark Mode' : 'Light Mode'}
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2.5">
+                  <button
+                    type="button"
+                    onClick={() => setIsDarkMode(false)}
+                    className={`min-h-[46px] px-3.5 py-2.5 rounded-xl border text-xs sm:text-sm font-bold flex items-center justify-center gap-2 transition-all ${
+                      !isDarkMode
+                        ? 'bg-white dark:bg-slate-800 border-indigo-600 text-indigo-600 shadow-xs ring-2 ring-indigo-500/20'
+                        : 'bg-white/60 dark:bg-slate-900/60 border-gray-200 dark:border-slate-700 text-gray-600 dark:text-slate-400 hover:bg-white'
+                    }`}
+                  >
+                    <Sun className={`w-4 h-4 ${!isDarkMode ? 'text-amber-500' : 'text-gray-400'}`} />
+                    <span>Light Mode</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setIsDarkMode(true)}
+                    className={`min-h-[46px] px-3.5 py-2.5 rounded-xl border text-xs sm:text-sm font-bold flex items-center justify-center gap-2 transition-all ${
+                      isDarkMode
+                        ? 'bg-slate-900 border-indigo-500 text-indigo-300 shadow-xs ring-2 ring-indigo-500/20'
+                        : 'bg-white/60 dark:bg-slate-900/60 border-gray-200 dark:border-slate-700 text-gray-600 dark:text-slate-400 hover:bg-white'
+                    }`}
+                  >
+                    <Moon className={`w-4 h-4 ${isDarkMode ? 'text-indigo-400' : 'text-gray-400'}`} />
+                    <span>Dark Mode</span>
+                  </button>
+                </div>
               </div>
 
               {/* Period Selector */}
-              <div>
-                <h4 className="text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-slate-400 mb-2.5">
-                  Timesheet Period
-                </h4>
+              <div className="p-4 rounded-2xl bg-gray-50/80 dark:bg-slate-800/50 border border-gray-200/80 dark:border-slate-800 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-slate-400 flex items-center gap-1.5">
+                    <Calendar className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+                    <span>Timesheet Period</span>
+                  </h4>
+                  <span className="text-[11px] font-semibold text-indigo-600 dark:text-indigo-400">
+                    {shiftSettings.period}
+                  </span>
+                </div>
                 <select
                   value={shiftSettings.period}
                   onChange={e => {
@@ -3467,439 +2981,47 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
                     localStorage.setItem('shift_settings', JSON.stringify(next));
                     setRecords(generateRecordsForPeriod(newPeriod, periodStart, records));
                   }}
-                  className="w-full min-h-[48px] px-3.5 py-2.5 text-sm font-semibold border border-gray-300 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-gray-900 dark:text-white"
+                  className="w-full min-h-[46px] px-3.5 py-2.5 text-sm font-semibold border border-gray-300 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-900 text-gray-900 dark:text-white focus:ring-2 focus:ring-indigo-500"
                 >
                   <option value="Bi-weekly">Bi-weekly (14 Days - Default)</option>
                   <option value="Weekly">Weekly (7 Days)</option>
                   <option value="Monthly">Monthly</option>
                 </select>
-
-                {/* Calculate Overtime Weekly Toggle */}
-                <label className="mt-3 p-3.5 rounded-2xl bg-indigo-50/70 dark:bg-indigo-950/30 border border-indigo-200/80 dark:border-indigo-800/60 flex items-start justify-between gap-3 cursor-pointer">
-                  <div>
-                    <span className="text-xs font-bold uppercase tracking-wider text-indigo-950 dark:text-indigo-200 block">
-                      Calculate Overtime Weekly
-                    </span>
-                    <span className="text-[11px] text-indigo-800/80 dark:text-indigo-300/80 mt-0.5 block leading-snug">
-                      {shiftSettings.calculateOvertimeWeekly !== false
-                        ? 'Weekly mode (default): Overtime (>40 hrs) is calculated for each 7-day workweek and reflected in Payroll Summary.'
-                        : 'Per-period mode: Overtime (>40 hrs) is calculated across the entire pay period total.'}
-                    </span>
-                  </div>
-                  <input
-                    type="checkbox"
-                    checked={shiftSettings.calculateOvertimeWeekly !== false}
-                    onChange={e => {
-                      const checked = e.target.checked;
-                      const next = { ...shiftSettings, calculateOvertimeWeekly: checked };
-                      setShiftSettings(next);
-                      localStorage.setItem('shift_settings', JSON.stringify(next));
-                      syncOvertimeCalculationMode(checked);
-                    }}
-                    className="w-5 h-5 mt-0.5 rounded text-indigo-600 focus:ring-indigo-500 shrink-0"
-                  />
-                </label>
-
-                {/* Calculate Daily Overtime (>8 hrs/day) Toggle */}
-                <label className="mt-2.5 p-3.5 rounded-2xl bg-rose-50/70 dark:bg-rose-950/30 border border-rose-200/80 dark:border-rose-800/60 flex items-start justify-between gap-3 cursor-pointer">
-                  <div>
-                    <span className="text-xs font-bold uppercase tracking-wider text-rose-950 dark:text-rose-200 block">
-                      Calculate Daily Overtime (&gt;8 hrs/day)
-                    </span>
-                    <span className="text-[11px] text-rose-800/80 dark:text-rose-300/80 mt-0.5 block leading-snug">
-                      {shiftSettings.calculateDailyOvertime
-                        ? 'Daily overtime enabled: Any hours worked beyond 8 hours in a single day are automatically counted as Overtime.'
-                        : 'Off: Daily hours over 8 count toward Regular Hours up to the 40-hour threshold.'}
-                    </span>
-                  </div>
-                  <input
-                    type="checkbox"
-                    checked={Boolean(shiftSettings.calculateDailyOvertime)}
-                    onChange={e => {
-                      const checked = e.target.checked;
-                      const next = { ...shiftSettings, calculateDailyOvertime: checked };
-                      setShiftSettings(next);
-                      localStorage.setItem('shift_settings', JSON.stringify(next));
-                      syncDailyOvertimeMode(checked);
-                    }}
-                    className="w-5 h-5 mt-0.5 rounded text-rose-600 focus:ring-rose-500 shrink-0"
-                  />
-                </label>
-              </div>
-
-              {/* Automatic Default Lunch Break (> 6 hrs with no lunch recorded) */}
-              <div className="p-4 rounded-2xl bg-amber-50/70 dark:bg-amber-950/30 border border-amber-200/80 dark:border-amber-800/60 space-y-3">
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <h4 className="text-xs font-bold uppercase tracking-wider text-amber-900 dark:text-amber-200 flex items-center gap-1.5">
-                      <Utensils className="w-3.5 h-3.5 text-amber-700 dark:text-amber-400" />
-                      <span>Auto Default Lunch Break</span>
-                    </h4>
-                    <p className="text-[11px] text-amber-800/80 dark:text-amber-300/80 mt-0.5 leading-snug">
-                      Automatically apply a default lunch break to any shift longer than{' '}
-                      <strong>{shiftSettings.autoLunchMinShiftHours || 6} hours</strong> that has no lunch recorded.
-                    </p>
-                  </div>
-                  <input
-                    type="checkbox"
-                    checked={Boolean(shiftSettings.autoLunchEnabled)}
-                    onChange={e => {
-                      const next = { ...shiftSettings, autoLunchEnabled: e.target.checked };
-                      setShiftSettings(next);
-                      localStorage.setItem('shift_settings', JSON.stringify(next));
-                    }}
-                    className="w-5 h-5 mt-0.5 rounded text-indigo-600 focus:ring-indigo-500 shrink-0"
-                  />
-                </div>
-
-                <div
-                  className={`space-y-3 ${
-                    shiftSettings.autoLunchEnabled ? '' : 'opacity-50 pointer-events-none'
-                  }`}
-                >
-                  <div>
-                    <label className="block text-xs font-semibold text-amber-900 dark:text-amber-200 mb-1.5">
-                      Default Lunch Duration
-                    </label>
-                    <div className="grid grid-cols-4 gap-2">
-                      {[15, 30, 45, 60].map(mins => {
-                        const isSelected = (Number(shiftSettings.autoLunchDurationMins) || 30) === mins;
-                        return (
-                          <button
-                            key={mins}
-                            type="button"
-                            onClick={() => {
-                              const next = { ...shiftSettings, autoLunchDurationMins: mins };
-                              setShiftSettings(next);
-                              localStorage.setItem('shift_settings', JSON.stringify(next));
-                            }}
-                            className={`min-h-[38px] px-2 py-1.5 rounded-xl text-xs font-bold border transition-all ${
-                              isSelected
-                                ? 'bg-amber-600 text-white border-amber-600 shadow-xs'
-                                : 'bg-white dark:bg-slate-800 text-gray-800 dark:text-slate-200 border-amber-200 dark:border-slate-700 hover:bg-amber-100/60'
-                            }`}
-                          >
-                            {mins} mins
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-
-                  <div className="flex items-center justify-between gap-3">
-                    <label className="text-xs font-semibold text-amber-900 dark:text-amber-200">
-                      Minimum Shift Length (hrs)
-                    </label>
-                    <input
-                      type="number"
-                      min={1}
-                      max={16}
-                      step={0.5}
-                      value={shiftSettings.autoLunchMinShiftHours ?? 6}
-                      onChange={e => {
-                        const val = Math.max(1, parseFloat(e.target.value) || 6);
-                        const next = { ...shiftSettings, autoLunchMinShiftHours: val };
-                        setShiftSettings(next);
-                        localStorage.setItem('shift_settings', JSON.stringify(next));
-                      }}
-                      className="w-20 min-h-[36px] px-2.5 py-1 text-xs font-bold text-center border border-amber-300 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 text-gray-900 dark:text-white"
-                    />
-                  </div>
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const filled = populateDefaultLunchCells();
-                      if (filled > 0) {
-                        showNotice(
-                          'success',
-                          `Filled ${shiftSettings.autoLunchDurationMins || 30}-min lunch break times on ${filled} shift${filled > 1 ? 's' : ''} (> ${shiftSettings.autoLunchMinShiftHours || 6}h).`
-                        );
-                      } else {
-                        showNotice(
-                          'success',
-                          `Auto ${shiftSettings.autoLunchDurationMins || 30}-min lunch deduction is active for all shifts > ${shiftSettings.autoLunchMinShiftHours || 6}h without recorded lunch.`
-                        );
-                      }
-                    }}
-                    className="w-full min-h-[38px] px-3 py-1.5 text-xs font-bold text-amber-950 bg-[#FEF9C3] hover:bg-amber-200/80 border border-amber-300 rounded-xl transition-colors flex items-center justify-center gap-1.5"
-                  >
-                    <Utensils className="w-3.5 h-3.5" />
-                    <span>
-                      Fill {shiftSettings.autoLunchDurationMins || 30}-Min Lunch Cells on Shifts &gt;{' '}
-                      {shiftSettings.autoLunchMinShiftHours || 6}h
-                    </span>
-                  </button>
-                </div>
-              </div>
-
-              {/* Excessive Break Duration Alert (> 120 mins single day) */}
-              <div className="p-4 rounded-2xl bg-rose-50/70 dark:bg-rose-950/30 border border-rose-200/80 dark:border-rose-800/60 space-y-3">
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <h4 className="text-xs font-bold uppercase tracking-wider text-rose-900 dark:text-rose-200 flex items-center gap-1.5">
-                      <AlertTriangle className="w-3.5 h-3.5 text-rose-600 dark:text-rose-400" />
-                      <span>Excessive Break Alert (&gt;{shiftSettings.maxBreakMinutes || 120} mins)</span>
-                    </h4>
-                    <p className="text-[11px] text-rose-800/80 dark:text-rose-300/80 mt-0.5 leading-snug">
-                      Alert if total break time for a single day exceeds{' '}
-                      <strong>{shiftSettings.maxBreakMinutes || 120} minutes</strong> to prevent common data entry or AM/PM errors.
-                    </p>
-                  </div>
-                  <input
-                    type="checkbox"
-                    checked={shiftSettings.excessiveBreakAlertEnabled !== false}
-                    onChange={e => {
-                      const next = {
-                        ...shiftSettings,
-                        excessiveBreakAlertEnabled: e.target.checked,
-                      };
-                      setShiftSettings(next);
-                      localStorage.setItem('shift_settings', JSON.stringify(next));
-                    }}
-                    className="w-5 h-5 mt-0.5 rounded text-indigo-600 focus:ring-indigo-500 shrink-0"
-                  />
-                </div>
-
-                <div
-                  className={`space-y-2.5 ${
-                    shiftSettings.excessiveBreakAlertEnabled !== false
-                      ? ''
-                      : 'opacity-50 pointer-events-none'
-                  }`}
-                >
-                  <div className="flex items-center justify-between gap-3">
-                    <label className="text-xs font-semibold text-rose-900 dark:text-rose-200">
-                      Max Daily Break Limit (mins)
-                    </label>
-                    <input
-                      type="number"
-                      min={15}
-                      max={480}
-                      step={15}
-                      value={shiftSettings.maxBreakMinutes ?? 120}
-                      onChange={e => {
-                        const val = Math.max(15, parseInt(e.target.value, 10) || 120);
-                        const next = { ...shiftSettings, maxBreakMinutes: val };
-                        setShiftSettings(next);
-                        localStorage.setItem('shift_settings', JSON.stringify(next));
-                      }}
-                      className="w-24 min-h-[36px] px-2.5 py-1 text-xs font-bold text-center border border-rose-300 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 text-gray-900 dark:text-white"
-                    />
-                  </div>
-
-                    <div className="grid grid-cols-4 gap-2">
-                    {[60, 90, 120, 180].map(mins => {
-                      const isSelected = (Number(shiftSettings.maxBreakMinutes) || 120) === mins;
-                      return (
-                        <button
-                          key={mins}
-                          type="button"
-                          onClick={() => {
-                            const next = { ...shiftSettings, maxBreakMinutes: mins };
-                            setShiftSettings(next);
-                            localStorage.setItem('shift_settings', JSON.stringify(next));
-                          }}
-                          className={`min-h-[36px] px-2 py-1 rounded-xl text-xs font-bold border transition-all ${
-                            isSelected
-                              ? 'bg-rose-600 text-white border-rose-600 shadow-xs'
-                              : 'bg-white dark:bg-slate-800 text-gray-800 dark:text-slate-200 border-rose-200 dark:border-slate-700 hover:bg-rose-100/60'
-                          }`}
-                        >
-                          {mins}m
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              </div>
-
-              {/* Public Holidays Highlighting & Local Holiday Sync */}
-              <div className="p-4 rounded-2xl bg-violet-50/70 dark:bg-violet-950/30 border border-violet-200/80 dark:border-violet-800/60 space-y-3">
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <h4 className="text-xs font-bold uppercase tracking-wider text-violet-900 dark:text-violet-200 flex items-center gap-1.5">
-                      <Calendar className="w-3.5 h-3.5 text-violet-600 dark:text-violet-400" />
-                      <span>Highlight Public Holidays</span>
-                    </h4>
-                    <p className="text-[11px] text-violet-800/80 dark:text-violet-300/80 mt-0.5 leading-snug">
-                      Automatically highlight and mark official public holidays and custom company dates in the timesheet view.
-                    </p>
-                  </div>
-                  <input
-                    type="checkbox"
-                    checked={shiftSettings.highlightPublicHolidays !== false}
-                    onChange={e => {
-                      const checked = e.target.checked;
-                      const next = { ...shiftSettings, highlightPublicHolidays: checked };
-                      setShiftSettings(next);
-                      localStorage.setItem('shift_settings', JSON.stringify(next));
-                      syncPublicHolidaySettings(checked, holidayCountry);
-                    }}
-                    className="w-5 h-5 mt-0.5 rounded text-violet-600 focus:ring-violet-500 shrink-0"
-                  />
-                </div>
-
-                <div
-                  className={`space-y-3 ${
-                    shiftSettings.highlightPublicHolidays !== false
-                      ? ''
-                      : 'opacity-50 pointer-events-none'
-                  }`}
-                >
-                  <div>
-                    <div className="flex items-center justify-between mb-1">
-                      <label className="text-xs font-semibold text-violet-900 dark:text-violet-200">
-                        Region / Holiday Calendar
-                      </label>
-                      <span className="text-[10px] font-bold text-violet-700 dark:text-violet-300">
-                        {isSyncingHolidays
-                          ? 'Syncing holidays...'
-                          : holidaySyncSource === 'api'
-                          ? 'Live API + Predefined active'
-                          : 'Predefined calendar active'}
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <select
-                        value={holidayCountry}
-                        onChange={e => {
-                          const newCountry = e.target.value as HolidayCountryCode;
-                          const next = { ...shiftSettings, holidayCountry: newCountry };
-                          setShiftSettings(next);
-                          localStorage.setItem('shift_settings', JSON.stringify(next));
-                          syncPublicHolidaySettings(
-                            shiftSettings.highlightPublicHolidays !== false,
-                            newCountry
-                          );
-                          syncHolidaysFromApi(newCountry, true);
-                        }}
-                        className="flex-1 min-h-[38px] px-2.5 py-1.5 text-xs font-bold border border-violet-300 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-gray-900 dark:text-white"
-                      >
-                        {SUPPORTED_HOLIDAY_COUNTRIES.map(c => (
-                          <option key={c.code} value={c.code}>
-                            {c.name}
-                          </option>
-                        ))}
-                      </select>
-                      <button
-                        type="button"
-                        disabled={isSyncingHolidays}
-                        onClick={() => syncHolidaysFromApi(holidayCountry, true)}
-                        className="min-h-[38px] px-3 py-1.5 text-xs font-bold text-violet-800 dark:text-violet-200 bg-violet-100 hover:bg-violet-200/80 dark:bg-violet-900/60 border border-violet-300 dark:border-violet-700 rounded-xl transition-colors whitespace-nowrap"
-                        title="Fetch latest local public holidays from Nager.Date Public Holiday API"
-                      >
-                        {isSyncingHolidays ? 'Syncing...' : 'Sync API'}
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Holidays in current pay period */}
-                  {periodHolidays.length > 0 && (
-                    <div className="p-2.5 rounded-xl bg-white/80 dark:bg-slate-800/80 border border-violet-200 dark:border-slate-700 space-y-1">
-                      <span className="text-[10px] font-extrabold uppercase tracking-wider text-violet-700 dark:text-violet-300 block">
-                        Holidays in Current Period ({periodHolidays.length})
-                      </span>
-                      <div className="flex flex-wrap gap-1.5">
-                        {periodHolidays.map(({ holiday: h }) => (
-                          <span
-                            key={h.date}
-                            className="inline-flex items-center gap-1 text-[11px] font-bold bg-violet-100 dark:bg-violet-950 text-violet-900 dark:text-violet-200 px-2 py-0.5 rounded-md border border-violet-200 dark:border-violet-800"
-                          >
-                            <span className="font-mono">{h.date.slice(5)}:</span>
-                            <span>{h.name}</span>
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Add Custom Company / Local Holiday */}
-                  <div className="pt-2 border-t border-violet-200/70 dark:border-violet-800/50 space-y-2">
-                    <label className="block text-[11px] font-bold text-violet-900 dark:text-violet-200">
-                      Add Custom Holiday Date
-                    </label>
-                    <div className="grid grid-cols-1 sm:grid-cols-12 gap-2">
-                      <input
-                        type="date"
-                        value={newCustomHolidayDate}
-                        onChange={e => setNewCustomHolidayDate(e.target.value)}
-                        className="sm:col-span-5 min-h-[36px] px-2.5 py-1 text-xs font-semibold border border-violet-300 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 text-gray-900 dark:text-white"
-                      />
-                      <input
-                        type="text"
-                        value={newCustomHolidayName}
-                        onChange={e => setNewCustomHolidayName(e.target.value)}
-                        placeholder="Holiday name (e.g., Founder's Day)"
-                        className="sm:col-span-5 min-h-[36px] px-2.5 py-1 text-xs font-medium border border-violet-300 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 text-gray-900 dark:text-white"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (!newCustomHolidayDate || !newCustomHolidayName.trim()) return;
-                          const updated = addCustomHoliday(
-                            newCustomHolidayDate,
-                            newCustomHolidayName
-                          );
-                          setCustomHolidays(updated);
-                          setNewCustomHolidayDate('');
-                          setNewCustomHolidayName('');
-                        }}
-                        className="sm:col-span-2 min-h-[36px] px-2.5 py-1 text-xs font-bold text-white bg-violet-600 hover:bg-violet-700 rounded-lg transition-colors"
-                      >
-                        Add
-                      </button>
-                    </div>
-
-                    {customHolidays.length > 0 && (
-                      <div className="flex flex-wrap gap-1.5 pt-1">
-                        {customHolidays.map(ch => (
-                          <span
-                            key={ch.date}
-                            className="inline-flex items-center gap-1 text-[11px] font-semibold bg-white dark:bg-slate-800 text-violet-900 dark:text-violet-200 px-2 py-0.5 rounded-lg border border-violet-300 dark:border-slate-700"
-                          >
-                            <span className="font-mono font-bold">{ch.date}</span>
-                            <span>{ch.name}</span>
-                            <button
-                              type="button"
-                              onClick={() => setCustomHolidays(removeCustomHoliday(ch.date))}
-                              className="text-violet-500 hover:text-rose-600 ml-0.5"
-                              title="Remove custom holiday"
-                            >
-                              <X className="w-3 h-3" />
-                            </button>
-                          </span>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                </div>
               </div>
 
               {/* Shift Notifications & Times */}
-              <div>
-                <div className="flex items-center justify-between mb-3">
-                  <h4 className="text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-slate-400">
-                    Shift Notifications
-                  </h4>
-                  <input
-                    type="checkbox"
-                    checked={shiftSettings.enabled}
-                    onChange={e => {
-                      const next = { ...shiftSettings, enabled: e.target.checked };
-                      setShiftSettings(next);
-                      localStorage.setItem('shift_settings', JSON.stringify(next));
-                      if (e.target.checked && Notification.permission === 'default') {
-                        Notification.requestPermission();
-                      }
-                    }}
-                    className="w-5 h-5 rounded text-indigo-600 focus:ring-indigo-500"
-                  />
+              <div className="p-4 rounded-2xl bg-gray-50/80 dark:bg-slate-800/50 border border-gray-200/80 dark:border-slate-800 space-y-3.5">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h4 className="text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-slate-400 flex items-center gap-1.5">
+                      <Clock className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+                      <span>Shift Notifications</span>
+                    </h4>
+                    <p className="text-xs text-gray-500 dark:text-slate-400 mt-0.5">
+                      Default shift &amp; lunch schedule for autofill and reminders
+                    </p>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={shiftSettings.enabled}
+                      onChange={e => {
+                        const next = { ...shiftSettings, enabled: e.target.checked };
+                        setShiftSettings(next);
+                        localStorage.setItem('shift_settings', JSON.stringify(next));
+                        if (e.target.checked && typeof Notification !== 'undefined' && Notification.permission === 'default') {
+                          Notification.requestPermission();
+                        }
+                      }}
+                      className="sr-only peer"
+                    />
+                    <div className="w-11 h-6 bg-gray-300 dark:bg-slate-700 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-indigo-500 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
+                  </label>
                 </div>
 
-                <div className={`grid grid-cols-2 gap-3 ${shiftSettings.enabled ? '' : 'opacity-50 pointer-events-none'}`}>
+                <div className={`grid grid-cols-2 gap-3 transition-opacity ${shiftSettings.enabled ? '' : 'opacity-50 pointer-events-none'}`}>
                   <div>
-                    <label className="text-xs font-medium text-gray-500">Start Time</label>
+                    <label className="block text-xs font-semibold text-gray-600 dark:text-slate-300 mb-1">Start Time</label>
                     <input
                       type="time"
                       value={shiftSettings.startTime}
@@ -3908,11 +3030,11 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
                         setShiftSettings(next);
                         localStorage.setItem('shift_settings', JSON.stringify(next));
                       }}
-                      className="w-full min-h-[42px] px-3 text-sm border rounded-xl bg-white dark:bg-slate-800"
+                      className="w-full min-h-[42px] px-3 text-sm font-medium border border-gray-300 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-900 text-gray-900 dark:text-white focus:ring-2 focus:ring-indigo-500"
                     />
                   </div>
                   <div>
-                    <label className="text-xs font-medium text-gray-500">End Time</label>
+                    <label className="block text-xs font-semibold text-gray-600 dark:text-slate-300 mb-1">End Time</label>
                     <input
                       type="time"
                       value={shiftSettings.endTime}
@@ -3921,11 +3043,11 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
                         setShiftSettings(next);
                         localStorage.setItem('shift_settings', JSON.stringify(next));
                       }}
-                      className="w-full min-h-[42px] px-3 text-sm border rounded-xl bg-white dark:bg-slate-800"
+                      className="w-full min-h-[42px] px-3 text-sm font-medium border border-gray-300 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-900 text-gray-900 dark:text-white focus:ring-2 focus:ring-indigo-500"
                     />
                   </div>
                   <div>
-                    <label className="text-xs font-medium text-gray-500">Lunch Start</label>
+                    <label className="block text-xs font-semibold text-gray-600 dark:text-slate-300 mb-1">Lunch Start</label>
                     <input
                       type="time"
                       value={shiftSettings.lunchStart}
@@ -3934,11 +3056,11 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
                         setShiftSettings(next);
                         localStorage.setItem('shift_settings', JSON.stringify(next));
                       }}
-                      className="w-full min-h-[42px] px-3 text-sm border rounded-xl bg-white dark:bg-slate-800"
+                      className="w-full min-h-[42px] px-3 text-sm font-medium border border-gray-300 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-900 text-gray-900 dark:text-white focus:ring-2 focus:ring-indigo-500"
                     />
                   </div>
                   <div>
-                    <label className="text-xs font-medium text-gray-500">Lunch End</label>
+                    <label className="block text-xs font-semibold text-gray-600 dark:text-slate-300 mb-1">Lunch End</label>
                     <input
                       type="time"
                       value={shiftSettings.lunchEnd}
@@ -3947,16 +3069,16 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
                         setShiftSettings(next);
                         localStorage.setItem('shift_settings', JSON.stringify(next));
                       }}
-                      className="w-full min-h-[42px] px-3 text-sm border rounded-xl bg-white dark:bg-slate-800"
+                      className="w-full min-h-[42px] px-3 text-sm font-medium border border-gray-300 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-900 text-gray-900 dark:text-white focus:ring-2 focus:ring-indigo-500"
                     />
                   </div>
                 </div>
               </div>
 
               {/* General Actions in Settings: History, Clear, Logout */}
-              <div className="pt-4 border-t border-gray-100 dark:border-slate-800 space-y-2.5">
-                <h4 className="text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-slate-400 mb-2">
-                  Data & History
+              <div className="p-4 rounded-2xl bg-gray-50/80 dark:bg-slate-800/50 border border-gray-200/80 dark:border-slate-800 space-y-2.5">
+                <h4 className="text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-slate-400 mb-1">
+                  Data &amp; History
                 </h4>
 
                 <button
@@ -3965,10 +3087,13 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
                     setIsSettingsOpen(false);
                     openHistory();
                   }}
-                  className="w-full min-h-[44px] px-4 py-2.5 bg-gray-50 dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-xl text-sm font-semibold text-gray-800 dark:text-slate-200 flex items-center justify-center gap-2 hover:bg-gray-100"
+                  className="w-full min-h-[46px] px-4 py-2.5 bg-white dark:bg-slate-900 border border-gray-200 dark:border-slate-700 rounded-xl text-sm font-semibold text-gray-800 dark:text-slate-200 flex items-center justify-between hover:bg-indigo-50/40 dark:hover:bg-slate-800 transition-colors"
                 >
-                  <History className="w-4 h-4 text-indigo-600" />
-                  <span>View Timesheet History</span>
+                  <span className="flex items-center gap-2.5">
+                    <History className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+                    <span>View Timesheet History</span>
+                  </span>
+                  <ChevronRight className="w-4 h-4 text-gray-400" />
                 </button>
 
                 <button
@@ -3977,10 +3102,13 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
                     setIsSettingsOpen(false);
                     setShowClearConfirm(true);
                   }}
-                  className="w-full min-h-[44px] px-4 py-2.5 bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900/50 rounded-xl text-sm font-semibold text-rose-700 dark:text-rose-300 flex items-center justify-center gap-2 hover:bg-rose-100"
+                  className="w-full min-h-[46px] px-4 py-2.5 bg-rose-50/80 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900/50 rounded-xl text-sm font-semibold text-rose-700 dark:text-rose-300 flex items-center justify-between hover:bg-rose-100/80 dark:hover:bg-rose-950/50 transition-colors"
                 >
-                  <Trash2 className="w-4 h-4 text-rose-600" />
-                  <span>Clear Timesheet Data</span>
+                  <span className="flex items-center gap-2.5">
+                    <Trash2 className="w-4 h-4 text-rose-600 dark:text-rose-400" />
+                    <span>Clear Timesheet Data</span>
+                  </span>
+                  <ChevronRight className="w-4 h-4 text-rose-400" />
                 </button>
 
                 {user && (
@@ -3991,7 +3119,7 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
                       setUser(null);
                       setIsSettingsOpen(false);
                     }}
-                    className="w-full min-h-[44px] px-4 py-2.5 text-xs font-bold text-gray-500 hover:text-gray-700 flex items-center justify-center gap-1.5"
+                    className="w-full min-h-[42px] px-4 py-2 text-xs font-bold text-gray-500 hover:text-gray-700 dark:text-slate-400 dark:hover:text-slate-200 flex items-center justify-center gap-1.5"
                   >
                     <LogOut className="w-3.5 h-3.5" />
                     <span>Sign Out ({user.email})</span>
@@ -4002,11 +3130,14 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
             </div>
 
             {/* Modal Footer with DONE button */}
-            <div className="p-4 bg-gray-50 dark:bg-slate-800/60 border-t border-gray-100 dark:border-slate-800 flex justify-end">
+            <div className="px-5 py-3.5 bg-gray-50 dark:bg-slate-800/60 border-t border-gray-100 dark:border-slate-800 flex items-center justify-between">
+              <span className="text-[11px] text-gray-400 dark:text-slate-500 font-medium">
+                Changes save automatically
+              </span>
               <button
                 type="button"
                 onClick={() => setIsSettingsOpen(false)}
-                className="min-h-[44px] px-6 py-2.5 bg-indigo-600 text-white rounded-xl text-sm font-bold shadow-sm active:scale-95"
+                className="min-h-[42px] px-6 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-bold shadow-sm active:scale-95 transition-all"
               >
                 Done
               </button>
@@ -4208,61 +3339,126 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
               </button>
             </div>
 
-            <div className="p-4 border-b border-gray-100 dark:border-slate-800">
+            <div className="p-4 border-b border-gray-100 dark:border-slate-800 space-y-2">
               <div className="relative">
-                <Search className="w-4 h-4 text-gray-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                <Search className="w-4 h-4 text-gray-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
                 <input
                   type="text"
-                  placeholder="Search by period, name, or date..."
+                  placeholder="Search by period, employee name, date, notes, or hours..."
                   value={historySearchTerm}
                   onChange={e => setHistorySearchTerm(e.target.value)}
-                  className="w-full pl-10 pr-4 py-2.5 text-sm border border-gray-300 dark:border-slate-700 rounded-xl bg-gray-50 dark:bg-slate-800 text-gray-900 dark:text-white"
+                  className="w-full pl-10 pr-9 py-2.5 text-sm border border-gray-300 dark:border-slate-700 rounded-xl bg-gray-50 dark:bg-slate-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-indigo-500 focus:bg-white dark:focus:bg-slate-900 transition-all"
                 />
+                {historySearchTerm && (
+                  <button
+                    type="button"
+                    onClick={() => setHistorySearchTerm('')}
+                    aria-label="Clear search"
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 text-gray-400 hover:text-gray-600 dark:hover:text-slate-200 rounded-lg"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                )}
               </div>
+              {totalHistoryCount > 0 && (
+                <div className="flex items-center justify-between text-xs text-gray-500 dark:text-slate-400 px-1">
+                  <span>
+                    Showing <strong className="text-gray-800 dark:text-slate-200">{filteredHistory.length}</strong> of{' '}
+                    <strong className="text-gray-800 dark:text-slate-200">{totalHistoryCount}</strong> saved timesheets
+                  </span>
+                  {historySearchTerm.trim() && (
+                    <span className="text-indigo-600 dark:text-indigo-400 font-semibold">
+                      Filtering live for &ldquo;{historySearchTerm.trim()}&rdquo;
+                    </span>
+                  )}
+                </div>
+              )}
             </div>
 
             <div className="p-4 overflow-y-auto flex-1 space-y-2.5">
               {filteredHistory.length === 0 ? (
-                <div className="text-center py-12 text-sm text-gray-500">
-                  No saved history found for {companyName}.
+                <div className="text-center py-12 text-sm text-gray-500 dark:text-slate-400 space-y-2">
+                  {historySearchTerm.trim() && totalHistoryCount > 0 ? (
+                    <>
+                      <p>
+                        No timesheets match <strong className="text-gray-800 dark:text-slate-200">&ldquo;{historySearchTerm.trim()}&rdquo;</strong>.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => setHistorySearchTerm('')}
+                        className="mt-1 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/50 hover:bg-indigo-100"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                        <span>Clear Filter</span>
+                      </button>
+                    </>
+                  ) : (
+                    <p>No saved history found for {companyName}.</p>
+                  )}
                 </div>
               ) : (
-                filteredHistory.map(([week, data]) => (
-                  <div
-                    key={week}
-                    onClick={() => loadHistoryItem(week)}
-                    className="p-3.5 bg-gray-50 dark:bg-slate-800/80 hover:bg-indigo-50/50 dark:hover:bg-slate-800 rounded-2xl border border-gray-200 dark:border-slate-700 flex items-center justify-between cursor-pointer transition-all"
-                  >
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <span className="font-bold text-sm text-gray-900 dark:text-white">
-                          Period: {data.weekOf || data.periodStart || week}
-                        </span>
-                        {data.name && (
-                          <span className="text-xs bg-indigo-50 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300 px-2 py-0.5 rounded-md font-semibold">
-                            {data.name}
-                          </span>
-                        )}
-                      </div>
-                      <div className="text-xs text-gray-500 mt-1">
-                        Total: {data.records?.reduce((acc: number, r: any) => acc + (parseFloat(r.totalHours) || 0), 0).toFixed(2) || '0.00'} hrs
-                      </div>
-                    </div>
+                filteredHistory.map(([week, data]) => {
+                  const periodLabel = String(data.weekOf || data.periodStart || week);
+                  const totalHrs =
+                    data.records?.reduce((acc: number, r: any) => acc + (parseFloat(r.totalHours) || 0), 0).toFixed(2) ||
+                    '0.00';
+                  const matchingNoteRecord =
+                    historySearchTerm.trim() &&
+                    Array.isArray(data.records) &&
+                    data.records.find(
+                      (r: any) =>
+                        r.notes && String(r.notes).toLowerCase().includes(historySearchTerm.trim().toLowerCase())
+                    );
 
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={e => {
-                          e.stopPropagation();
-                          setItemToDelete({ week, e });
-                        }}
-                        className="p-2 text-gray-400 hover:text-rose-600 rounded-lg"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                      <ChevronRight className="w-4 h-4 text-gray-400" />
+                  return (
+                    <div
+                      key={week}
+                      onClick={() => loadHistoryItem(week)}
+                      className="p-3.5 bg-gray-50 dark:bg-slate-800/80 hover:bg-indigo-50/50 dark:hover:bg-slate-800 rounded-2xl border border-gray-200 dark:border-slate-700 flex items-center justify-between cursor-pointer transition-all"
+                    >
+                      <div className="min-w-0 pr-3">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="font-bold text-sm text-gray-900 dark:text-white">
+                            Period: {highlightMatch(periodLabel, historySearchTerm)}
+                          </span>
+                          {data.name && (
+                            <span className="text-xs bg-indigo-50 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300 px-2 py-0.5 rounded-md font-semibold">
+                              {highlightMatch(String(data.name), historySearchTerm)}
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-xs text-gray-500 dark:text-slate-400 mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
+                          <span>
+                            Total: {highlightMatch(totalHrs, historySearchTerm)} hrs
+                          </span>
+                          {data.date && (
+                            <span>
+                              Signed: {highlightMatch(String(data.date), historySearchTerm)}
+                            </span>
+                          )}
+                          {matchingNoteRecord && (
+                            <span className="text-[11px] bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300 px-2 py-0.5 rounded-md">
+                              Note: {highlightMatch(String(matchingNoteRecord.notes), historySearchTerm)}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2 shrink-0">
+                        <button
+                          onClick={e => {
+                            e.stopPropagation();
+                            setItemToDelete({ week, e });
+                          }}
+                          className="p-2 text-gray-400 hover:text-rose-600 rounded-lg"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                        <ChevronRight className="w-4 h-4 text-gray-400" />
+                      </div>
                     </div>
-                  </div>
-                ))
+                  );
+                })
               )}
             </div>
 

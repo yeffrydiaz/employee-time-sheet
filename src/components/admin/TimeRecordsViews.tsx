@@ -523,19 +523,44 @@ export default function TimeRecordsViews({
     return summarizeEvaluatedRecords(allEvals);
   }, [dayViewWeeks]);
 
-  const handleDayBulkApprove = (approve: boolean) => {
-    if (selectedDayRecordIds.length === 0) return;
+  const canApproveAsManager =
+    currentUser.role === 'Admin' ||
+    (currentUser.role === 'Manager' && Boolean(currentUser.permissions.allowApproveRecords));
+
+  const canActAsEmployeeInDayView =
+    company.approvalMode === 'Employee and Manager' &&
+    Boolean(
+      currentDayEmployee &&
+        (currentUser.role === 'Admin' || currentDayEmployee.id === currentUser.id)
+    );
+
+  const handleDayBulkApproveManager = (approve: boolean) => {
+    if (selectedDayRecordIds.length === 0 || !canApproveAsManager) return;
     setRecordsApproval(company.id, selectedDayRecordIds, {
       approvedByManager: approve,
-      ...(approve ? {} : { approvedByEmployee: false }),
     });
     setSelectedDayRecordIds([]);
     onRefresh();
     setBanner({
       type: 'success',
       text: approve
-        ? `Approved ${selectedDayRecordIds.length} selected record(s).`
-        : `Unapproved ${selectedDayRecordIds.length} selected record(s).`,
+        ? `Approved ${selectedDayRecordIds.length} selected record(s) as Manager.`
+        : `Unapproved ${selectedDayRecordIds.length} selected record(s) as Manager.`,
+    });
+  };
+
+  const handleDayBulkApproveEmployee = (approve: boolean) => {
+    if (selectedDayRecordIds.length === 0 || !canActAsEmployeeInDayView) return;
+    setRecordsApproval(company.id, selectedDayRecordIds, {
+      approvedByEmployee: approve,
+    });
+    setSelectedDayRecordIds([]);
+    onRefresh();
+    setBanner({
+      type: 'success',
+      text: approve
+        ? `Approved ${selectedDayRecordIds.length} selected record(s) as Employee.`
+        : `Unapproved ${selectedDayRecordIds.length} selected record(s) as Employee.`,
     });
   };
 
@@ -1074,22 +1099,46 @@ export default function TimeRecordsViews({
             <div className="flex flex-wrap items-center gap-2">
               {company.approvalMode !== 'Off' && (
                 <>
-                  <button
-                    type="button"
-                    onClick={() => handleDayBulkApprove(true)}
-                    disabled={selectedDayRecordIds.length === 0}
-                    className="px-3 py-1.5 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg disabled:opacity-40 whitespace-nowrap"
-                  >
-                    Approve Selected
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleDayBulkApprove(false)}
-                    disabled={selectedDayRecordIds.length === 0}
-                    className="px-3 py-1.5 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg disabled:opacity-40 whitespace-nowrap"
-                  >
-                    Unapprove Selected
-                  </button>
+                  {canApproveAsManager && (
+                    <button
+                      type="button"
+                      onClick={() => handleDayBulkApproveManager(true)}
+                      disabled={selectedDayRecordIds.length === 0}
+                      className="px-3 py-1.5 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg disabled:opacity-40 whitespace-nowrap"
+                    >
+                      Approve
+                    </button>
+                  )}
+                  {canActAsEmployeeInDayView && (
+                    <button
+                      type="button"
+                      onClick={() => handleDayBulkApproveEmployee(true)}
+                      disabled={selectedDayRecordIds.length === 0}
+                      className="px-3 py-1.5 text-xs font-semibold text-emerald-800 bg-emerald-100 hover:bg-emerald-200 rounded-lg disabled:opacity-40 whitespace-nowrap"
+                    >
+                      Approve as Employee
+                    </button>
+                  )}
+                  {canApproveAsManager && (
+                    <button
+                      type="button"
+                      onClick={() => handleDayBulkApproveManager(false)}
+                      disabled={selectedDayRecordIds.length === 0}
+                      className="px-3 py-1.5 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg disabled:opacity-40 whitespace-nowrap"
+                    >
+                      Unapprove as Manager
+                    </button>
+                  )}
+                  {canActAsEmployeeInDayView && (
+                    <button
+                      type="button"
+                      onClick={() => handleDayBulkApproveEmployee(false)}
+                      disabled={selectedDayRecordIds.length === 0}
+                      className="px-3 py-1.5 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg disabled:opacity-40 whitespace-nowrap"
+                    >
+                      Unapprove as Employee
+                    </button>
+                  )}
                 </>
               )}
               <button

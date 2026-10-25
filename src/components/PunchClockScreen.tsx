@@ -35,7 +35,6 @@ export default function PunchClockScreen({
   const [confirmationMsg, setConfirmationMsg] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
   const [refreshTick, setRefreshTick] = useState(0);
-  const [customPunchTime, setCustomPunchTime] = useState('');
 
   useEffect(() => {
     const timer = setInterval(() => setNow(new Date()), 1000);
@@ -99,15 +98,6 @@ export default function PunchClockScreen({
     }
   }, [now, effectiveTimezone]);
 
-  const getCurrentHHMM = () => {
-    if (customPunchTime && /^\d{2}:\d{2}$/.test(customPunchTime)) {
-      return customPunchTime;
-    }
-    const h = String(now.getHours()).padStart(2, '0');
-    const m = String(now.getMinutes()).padStart(2, '0');
-    return `${h}:${m}`;
-  };
-
   // Compute elapsed time if currently clocked in
   const elapsedSoFarLabel = useMemo(() => {
     if (!openRecord || !openRecord.timeIn) return '';
@@ -123,28 +113,25 @@ export default function PunchClockScreen({
 
   const handlePunch = () => {
     setErrorMsg('');
-    const hhmm = getCurrentHHMM();
 
     if (!openRecord) {
-      const res = punchClockIn(company.id, user.id, hhmm, todayISO, comment);
+      const res = punchClockIn(company.id, user.id, comment);
       if (!res.ok) {
         setErrorMsg(res.error);
         return;
       }
       setComment('');
-      setCustomPunchTime('');
       setConfirmationMsg(
         `Clocked in at ${formatTimeDisplay(res.record.timeIn, company.timeFormat)} ✓`
       );
       setRefreshTick(t => t + 1);
     } else {
-      const res = punchClockOut(company.id, user.id, hhmm, comment);
+      const res = punchClockOut(company.id, user.id, comment);
       if (!res.ok) {
         setErrorMsg(res.error);
         return;
       }
       setComment('');
-      setCustomPunchTime('');
       setConfirmationMsg(
         `Clocked out at ${formatTimeDisplay(res.record.timeOut, company.timeFormat)} ✓`
       );
@@ -284,20 +271,6 @@ export default function PunchClockScreen({
               />
             </div>
           )}
-
-          {/* Punch time override for testing rounding (e.g. 09:07 -> 09:00) */}
-          <div className="text-left pt-2 border-t border-slate-100 flex items-center justify-between gap-2">
-            <label className="text-xs text-slate-500">
-              Punch Time (blank = current time):
-            </label>
-            <input
-              type="time"
-              value={customPunchTime}
-              onChange={e => setCustomPunchTime(e.target.value)}
-              aria-label="Punch Time"
-              className="px-2.5 py-1 text-xs font-mono border border-slate-200 rounded-lg bg-slate-50 text-slate-800"
-            />
-          </div>
 
           {/* Today's Earlier Punches Listed (In/Out pairs) */}
           <div className="text-left pt-4 border-t border-slate-200 space-y-2">
