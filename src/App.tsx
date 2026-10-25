@@ -30,7 +30,8 @@ import {
   ArrowDown,
   Copy,
   Download,
-  Wrench
+  Wrench,
+  FileText
 } from 'lucide-react';
 import SignatureCanvas from 'react-signature-canvas';
 import { motion, AnimatePresence } from 'motion/react';
@@ -1157,13 +1158,19 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
   const highlightMatch = useCallback((text: string, query: string): React.ReactNode => {
     const trimmed = query.trim();
     if (!trimmed || !text) return text;
-    const escaped = trimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const parts = String(text).split(new RegExp(`(${escaped})`, 'gi'));
+    const tokens = trimmed
+      .split(/\s+/)
+      .filter(Boolean)
+      .map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+    if (tokens.length === 0) return text;
+    const pattern = new RegExp(`(${tokens.join('|')})`, 'gi');
+    const parts = String(text).split(pattern);
+    const lowerTokens = trimmed.toLowerCase().split(/\s+/).filter(Boolean);
     return parts.map((part, idx) =>
-      part.toLowerCase() === trimmed.toLowerCase() ? (
+      lowerTokens.some(t => part.toLowerCase() === t) ? (
         <mark
           key={idx}
-          className="bg-amber-200 dark:bg-amber-500/40 text-gray-900 dark:text-white rounded px-0.5 font-extrabold"
+          className="bg-amber-200 dark:bg-amber-500/40 text-gray-900 dark:text-white rounded px-1 py-0.2 font-extrabold"
         >
           {part}
         </mark>
@@ -1174,35 +1181,37 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
   }, []);
 
   const filteredHistory = useMemo(() => {
-    const term = historySearchTerm.trim().toLowerCase();
+    const rawTerm = historySearchTerm.trim().toLowerCase();
+    const tokens = rawTerm.split(/\s+/).filter(Boolean);
     return Object.entries(historyData)
       .filter(([week, data]) => {
-        if (!term) return true;
-        const periodLabel = String(data.weekOf || data.periodStart || week).toLowerCase();
-        const totalHrs = (
-          data.records?.reduce((acc: number, r: any) => acc + (parseFloat(r.totalHours) || 0), 0).toFixed(2) || '0.00'
-        ).toLowerCase();
-        const nameMatch = data.name && String(data.name).toLowerCase().includes(term);
-        const dateMatch = data.date && String(data.date).toLowerCase().includes(term);
-        const notesMatch =
-          Array.isArray(data.records) &&
-          data.records.some(
-            (r: any) =>
-              (r.notes && String(r.notes).toLowerCase().includes(term)) ||
-              (r.date && String(r.date).toLowerCase().includes(term)) ||
-              (r.day && String(r.day).toLowerCase().includes(term))
-          );
-        return (
-           week.toLowerCase().includes(term) ||
-          periodLabel.includes(term) ||
-          Boolean(nameMatch) ||
-          Boolean(dateMatch) ||
-          totalHrs.includes(term) ||
-          Boolean(notesMatch)
-        );
+        if (tokens.length === 0) return true;
+        const periodRaw = String(data.weekOf || data.periodStart || week);
+        const formattedRange = formatPeriodRange(periodRaw, shiftSettings.period) || '';
+        const totalHrs =
+          data.records?.reduce((acc: number, r: any) => acc + (parseFloat(r.totalHours) || 0), 0).toFixed(2) || '0.00';
+        const recordText = Array.isArray(data.records)
+          ? data.records
+              .map((r: any) => `${r.day || ''} ${r.date || ''} ${r.notes || ''} ${r.totalHours || ''}`)
+              .join(' ')
+          : '';
+        const searchableBlob = [
+          week,
+          periodRaw,
+          formattedRange,
+          data.name || '',
+          data.employeeEmail || '',
+          data.date || '',
+          `${totalHrs} hrs`,
+          recordText,
+        ]
+          .join(' ')
+          .toLowerCase();
+
+        return tokens.every(token => searchableBlob.includes(token));
       })
       .sort((a, b) => b[0].localeCompare(a[0]));
-  }, [historyData, historySearchTerm]);
+  }, [historyData, historySearchTerm, shiftSettings.period]);
 
   return (
     <main className="min-h-screen bg-gray-50 dark:bg-[#0b0f19] text-gray-900 dark:text-gray-100 py-3 sm:py-6 px-2.5 sm:px-5 lg:px-8 pb-28 md:pb-12 print:bg-white pdf:bg-white print:p-0 pdf:p-0">
@@ -1339,6 +1348,20 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
                 </span>
               </div>
             )}
+
+            {/* Primary Header Business Login entry point */}
+            <div className="flex flex-col items-start sm:items-end shrink-0">
+              <button
+                onClick={onOpenBusinessLogin}
+                className="inline-flex items-center gap-1.5 text-xs font-semibold text-indigo-600 dark:text-indigo-400 hover:text-indigo-700 dark:hover:text-indigo-300 px-2.5 py-1 rounded-lg bg-indigo-50/70 dark:bg-indigo-950/40 hover:bg-indigo-100/80 dark:hover:bg-slate-800 transition-colors whitespace-nowrap"
+              >
+                <User className="w-3.5 h-3.5 shrink-0" />
+                <span>Business Login</span>
+              </button>
+              <p className="text-[10px] text-gray-400 dark:text-slate-500 text-left sm:text-right leading-tight mt-0.5 whitespace-nowrap">
+                Login adds sync + history. Sheet works without it.
+              </p>
+            </div>
 
             {/* Desktop Actions: Manager Email, Print, Send */}
             <div className="hidden md:flex items-center gap-2 shrink-0">
@@ -2229,6 +2252,8 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
                   const isToday = record.date === todayDateStr;
                   const outOfRange = isDateOutOfRange(record.date);
                   const dayWarning = getDayValidationWarning(record);
+                  const trimmedNote = record.notes ? record.notes.trim() : '';
+                  const hasNote = trimmedNote.length > 0;
 
                   return (
                     <tr
@@ -2255,6 +2280,29 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
                             {isToday && (
                               <span className="text-[10px] font-extrabold bg-indigo-600 text-white px-2 py-0.5 rounded-full uppercase shadow-xs ring-2 ring-indigo-400/50 animate-pulse print:animate-none print:ring-0">
                                 Today
+                              </span>
+                            )}
+                            {hasNote && (
+                              <span
+                                tabIndex={0}
+                                aria-label={`Note for ${record.day} (${record.date}): ${trimmedNote}`}
+                                aria-describedby={`desktop-date-note-tooltip-${index}`}
+                                className="group/date-note relative inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-indigo-50 dark:bg-indigo-950/70 text-indigo-700 dark:text-indigo-300 border border-indigo-200/80 dark:border-indigo-800/70 text-[10px] font-bold cursor-help focus:outline-none focus:ring-2 focus:ring-indigo-500 print:hidden pdf:hidden"
+                              >
+                                <span className="w-1.5 h-1.5 rounded-full bg-indigo-600 dark:bg-indigo-400 shrink-0" aria-hidden="true" />
+                                <FileText className="w-2.5 h-2.5 shrink-0" aria-hidden="true" />
+                                <span
+                                  id={`desktop-date-note-tooltip-${index}`}
+                                  role="tooltip"
+                                  className={`pointer-events-none absolute left-0 ${
+                                    index === 0 ? 'top-full mt-1.5' : 'bottom-full mb-1.5'
+                                  } z-40 w-56 max-w-xs p-2.5 rounded-xl bg-gray-900 dark:bg-slate-800 text-white text-xs font-medium leading-relaxed shadow-xl border border-gray-700 dark:border-slate-600 opacity-0 invisible group-hover/date-note:opacity-100 group-hover/date-note:visible group-focus-within/date-note:opacity-100 group-focus-within/date-note:visible transition-all duration-150 whitespace-normal break-words`}
+                                >
+                                  <span className="block text-[10px] font-extrabold uppercase tracking-wider text-indigo-300 mb-0.5">
+                                    {record.day} Note
+                                  </span>
+                                  <span>{trimmedNote}</span>
+                                </span>
                               </span>
                             )}
                           </div>
@@ -2463,13 +2511,44 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
 
                       {/* NOTES: WHITE BACKGROUND, PLACEHOLDER HIDDEN ON PRINT */}
                       <td className="px-2.5 lg:px-3 py-2 align-middle bg-white dark:bg-slate-900">
-                        <input
-                          type="text"
-                          value={record.notes}
-                          onChange={e => handleRecordChange(index, 'notes', e.target.value)}
-                          placeholder="e.g., Overtime"
-                          className="w-full text-xs lg:text-sm font-medium text-gray-900 dark:text-white bg-white dark:bg-slate-900 border border-gray-200/80 dark:border-slate-700/80 rounded-lg px-2.5 py-1.5 focus:ring-2 focus:ring-indigo-500 print:border-none print:p-0 print:placeholder-transparent pdf:placeholder-transparent"
-                        />
+                        <div className="relative group/note flex items-center">
+                          <input
+                            type="text"
+                            value={record.notes}
+                            onChange={e => handleRecordChange(index, 'notes', e.target.value)}
+                            placeholder="e.g., Overtime"
+                            aria-label={`Notes for ${record.day}, ${record.date}`}
+                            aria-describedby={hasNote ? `desktop-note-tooltip-${index}` : undefined}
+                            className={`w-full text-xs lg:text-sm font-medium text-gray-900 dark:text-white bg-white dark:bg-slate-900 border rounded-lg py-1.5 focus:ring-2 focus:ring-indigo-500 print:border-none print:p-0 print:placeholder-transparent pdf:placeholder-transparent transition-colors ${
+                              hasNote
+                                ? 'pl-2.5 pr-7 border-indigo-300 dark:border-indigo-700/80 bg-indigo-50/15 dark:bg-indigo-950/20'
+                                : 'px-2.5 border-gray-200/80 dark:border-slate-700/80'
+                            }`}
+                          />
+                          {hasNote && (
+                            <>
+                              <span
+                                className="absolute right-2 top-1/2 -translate-y-1/2 inline-flex items-center justify-center w-4 h-4 rounded-full bg-indigo-100 dark:bg-indigo-900/70 text-indigo-600 dark:text-indigo-300 pointer-events-none print:hidden pdf:hidden"
+                                aria-hidden="true"
+                              >
+                                <FileText className="w-2.5 h-2.5" />
+                              </span>
+                              <div
+                                id={`desktop-note-tooltip-${index}`}
+                                role="tooltip"
+                                className={`pointer-events-none absolute right-0 ${
+                                  index === 0 ? 'top-full mt-1.5' : 'bottom-full mb-1.5'
+                                } z-40 w-60 max-w-xs p-2.5 rounded-xl bg-gray-900 dark:bg-slate-800 text-white text-xs font-medium leading-relaxed shadow-xl border border-gray-700 dark:border-slate-600 opacity-0 invisible group-hover/note:opacity-100 group-hover/note:visible group-focus-within/note:opacity-100 group-focus-within/note:visible transition-all duration-150 whitespace-normal break-words print:hidden pdf:hidden`}
+                              >
+                                <div className="flex items-center gap-1.5 text-[10px] font-extrabold uppercase tracking-wider text-indigo-300 mb-0.5">
+                                  <FileText className="w-3 h-3 shrink-0" aria-hidden="true" />
+                                  <span>{record.day} Note</span>
+                                </div>
+                                <div>{trimmedNote}</div>
+                              </div>
+                            </>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   );
@@ -2844,8 +2923,8 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
             onClick={e => e.stopPropagation()}
           >
             {/* Modal Header */}
-            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 dark:border-slate-800 bg-gradient-to-r from-indigo-50/60 via-white to-white dark:from-slate-800/70 dark:via-slate-900 dark:to-slate-900">
-              <div className="flex items-center gap-3">
+            <div className="flex items-center justify-between px-6 py-4.5 border-b border-gray-100 dark:border-slate-800 bg-gradient-to-r from-indigo-50/70 via-white to-white dark:from-slate-800/80 dark:via-slate-900 dark:to-slate-900">
+              <div className="flex items-center gap-3.5">
                 <div className="w-10 h-10 rounded-2xl bg-indigo-600 text-white flex items-center justify-center shadow-sm shrink-0">
                   <Settings className="w-5 h-5" />
                 </div>
@@ -2853,7 +2932,7 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
                   <h3 className="text-base sm:text-lg font-bold text-gray-900 dark:text-white leading-tight">
                     Settings
                   </h3>
-                  <p className="text-xs text-gray-500 dark:text-slate-400">
+                  <p className="text-xs text-gray-500 dark:text-slate-400 mt-0.5">
                     Workspace access, display preferences &amp; shift defaults
                   </p>
                 </div>
@@ -2868,40 +2947,43 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
             </div>
 
             {/* Modal Body */}
-            <div className="p-5 overflow-y-auto space-y-5">
+            <div className="p-5 sm:p-6 overflow-y-auto space-y-6">
 
-              {/* Business Login & Workspace Portal (Moved from Header) */}
-              <div className="p-4 rounded-2xl bg-gradient-to-br from-indigo-50/90 via-indigo-50/40 to-white dark:from-indigo-950/40 dark:via-slate-800/60 dark:to-slate-900 border border-indigo-200/80 dark:border-indigo-900/60 shadow-xs">
+              {/* Prominent Business Login & Workspace Portal Card at Top of Modal */}
+              <section
+                aria-label="Business Account and Portal"
+                className="p-5 rounded-2xl bg-gradient-to-br from-indigo-600/10 via-indigo-50/90 to-white dark:from-indigo-950/80 dark:via-slate-800/90 dark:to-slate-900 border-2 border-indigo-200 dark:border-indigo-800/80 shadow-sm ring-1 ring-indigo-500/10 space-y-4"
+              >
                 <div className="flex items-start justify-between gap-3">
-                  <div className="flex items-start gap-3">
-                    <div className="w-10 h-10 rounded-xl bg-indigo-600/10 dark:bg-indigo-500/20 text-indigo-600 dark:text-indigo-400 flex items-center justify-center shrink-0 mt-0.5">
+                  <div className="flex items-start gap-3.5">
+                    <div className="w-11 h-11 rounded-2xl bg-indigo-600 text-white flex items-center justify-center shadow-sm shrink-0 mt-0.5">
                       <User className="w-5 h-5" />
                     </div>
                     <div>
-                      <div className="flex items-center gap-2">
-                        <h4 className="text-sm font-bold text-gray-900 dark:text-white">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h4 className="text-sm sm:text-base font-extrabold text-gray-900 dark:text-white tracking-tight">
                           Business Account &amp; Portal
                         </h4>
-                        <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-md bg-indigo-100 dark:bg-indigo-900/50 text-indigo-700 dark:text-indigo-300">
-                          Optional
+                        <span className="text-[10px] font-extrabold uppercase tracking-wider px-2 py-0.5 rounded-md bg-indigo-100 dark:bg-indigo-900/70 text-indigo-700 dark:text-indigo-300 border border-indigo-200/80 dark:border-indigo-700/60">
+                          Workspace Access
                         </span>
                       </div>
-                      <p className="text-xs text-gray-600 dark:text-slate-300 mt-1 leading-relaxed">
+                      <p className="text-xs text-gray-600 dark:text-slate-300 mt-1.5 leading-relaxed">
                         Login adds sync + history. Sheet works without it. Sign in to access the Admin Console, Web Punch Clock, and My Hours.
                       </p>
                     </div>
                   </div>
                 </div>
-                <div className="mt-3.5">
+                <div>
                   <button
                     type="button"
                     onClick={() => {
                       setIsSettingsOpen(false);
                       onOpenBusinessLogin();
                     }}
-                    className="w-full min-h-[44px] px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs sm:text-sm font-bold shadow-xs flex items-center justify-between transition-all active:scale-[0.99]"
+                    className="w-full min-h-[46px] px-4 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs sm:text-sm font-bold shadow-sm flex items-center justify-between transition-all active:scale-[0.99]"
                   >
-                    <span className="flex items-center gap-2">
+                    <span className="flex items-center gap-2.5">
                       <LogIn className="w-4 h-4" />
                       <span>Business Login</span>
                     </span>
@@ -2911,36 +2993,44 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
                     </span>
                   </button>
                 </div>
-              </div>
+              </section>
 
-              {/* Theme Switch - THE EXCLUSIVE HOME FOR THEME TOGGLE */}
-              <div className="p-4 rounded-2xl bg-gray-50/80 dark:bg-slate-800/50 border border-gray-200/80 dark:border-slate-800 space-y-3">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h4 className="text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-slate-400">
-                      Appearance
-                    </h4>
-                    <p className="text-xs text-gray-500 dark:text-slate-400 mt-0.5">
-                      Choose your preferred interface theme
-                    </p>
+              {/* Appearance Section - Icon-prefixed Header & Generous Toggle Spacing */}
+              <section
+                aria-label="Appearance"
+                className="p-5 rounded-2xl bg-gray-50/90 dark:bg-slate-800/50 border border-gray-200/90 dark:border-slate-800 space-y-4"
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 rounded-xl bg-amber-100/80 dark:bg-indigo-950/80 text-amber-600 dark:text-indigo-400 flex items-center justify-center shrink-0">
+                      {isDarkMode ? <Moon className="w-4 h-4" /> : <Sun className="w-4 h-4" />}
+                    </div>
+                    <div>
+                      <h4 className="text-xs font-bold uppercase tracking-wider text-gray-700 dark:text-slate-200">
+                        Appearance
+                      </h4>
+                      <p className="text-xs text-gray-500 dark:text-slate-400 mt-0.5">
+                        Choose your preferred interface theme
+                      </p>
+                    </div>
                   </div>
                   <button
                     type="button"
                     onClick={() => setIsDarkMode(!isDarkMode)}
-                    className="text-xs font-bold text-indigo-600 dark:text-indigo-400 hover:underline"
+                    className="text-xs font-bold text-indigo-600 dark:text-indigo-400 hover:underline shrink-0"
                   >
                     Theme: {isDarkMode ? 'Dark Mode' : 'Light Mode'}
                   </button>
                 </div>
 
-                <div className="grid grid-cols-2 gap-2.5">
+                <div className="grid grid-cols-2 gap-3.5 pt-0.5">
                   <button
                     type="button"
                     onClick={() => setIsDarkMode(false)}
-                    className={`min-h-[46px] px-3.5 py-2.5 rounded-xl border text-xs sm:text-sm font-bold flex items-center justify-center gap-2 transition-all ${
+                    className={`min-h-[48px] px-4 py-2.5 rounded-xl border text-xs sm:text-sm font-bold flex items-center justify-center gap-2.5 transition-all ${
                       !isDarkMode
                         ? 'bg-white dark:bg-slate-800 border-indigo-600 text-indigo-600 shadow-xs ring-2 ring-indigo-500/20'
-                        : 'bg-white/60 dark:bg-slate-900/60 border-gray-200 dark:border-slate-700 text-gray-600 dark:text-slate-400 hover:bg-white'
+                        : 'bg-white/70 dark:bg-slate-900/60 border-gray-200 dark:border-slate-700 text-gray-600 dark:text-slate-400 hover:bg-white'
                     }`}
                   >
                     <Sun className={`w-4 h-4 ${!isDarkMode ? 'text-amber-500' : 'text-gray-400'}`} />
@@ -2949,26 +3039,38 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
                   <button
                     type="button"
                     onClick={() => setIsDarkMode(true)}
-                    className={`min-h-[46px] px-3.5 py-2.5 rounded-xl border text-xs sm:text-sm font-bold flex items-center justify-center gap-2 transition-all ${
+                    className={`min-h-[48px] px-4 py-2.5 rounded-xl border text-xs sm:text-sm font-bold flex items-center justify-center gap-2.5 transition-all ${
                       isDarkMode
                         ? 'bg-slate-900 border-indigo-500 text-indigo-300 shadow-xs ring-2 ring-indigo-500/20'
-                        : 'bg-white/60 dark:bg-slate-900/60 border-gray-200 dark:border-slate-700 text-gray-600 dark:text-slate-400 hover:bg-white'
+                        : 'bg-white/70 dark:bg-slate-900/60 border-gray-200 dark:border-slate-700 text-gray-600 dark:text-slate-400 hover:bg-white'
                     }`}
                   >
                     <Moon className={`w-4 h-4 ${isDarkMode ? 'text-indigo-400' : 'text-gray-400'}`} />
                     <span>Dark Mode</span>
                   </button>
                 </div>
-              </div>
+              </section>
 
-              {/* Period Selector */}
-              <div className="p-4 rounded-2xl bg-gray-50/80 dark:bg-slate-800/50 border border-gray-200/80 dark:border-slate-800 space-y-2.5">
-                <div className="flex items-center justify-between">
-                  <h4 className="text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-slate-400 flex items-center gap-1.5">
-                    <Calendar className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
-                    <span>Timesheet Period</span>
-                  </h4>
-                  <span className="text-[11px] font-semibold text-indigo-600 dark:text-indigo-400">
+              {/* Timesheet Period Section - Icon-prefixed Header */}
+              <section
+                aria-label="Timesheet Period"
+                className="p-5 rounded-2xl bg-gray-50/90 dark:bg-slate-800/50 border border-gray-200/90 dark:border-slate-800 space-y-3.5"
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 rounded-xl bg-indigo-100/80 dark:bg-indigo-950/80 text-indigo-600 dark:text-indigo-400 flex items-center justify-center shrink-0">
+                      <Calendar className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <h4 className="text-xs font-bold uppercase tracking-wider text-gray-700 dark:text-slate-200">
+                        Timesheet Period
+                      </h4>
+                      <p className="text-xs text-gray-500 dark:text-slate-400 mt-0.5">
+                        Configure default pay period length
+                      </p>
+                    </div>
+                  </div>
+                  <span className="text-[11px] font-bold px-2.5 py-1 rounded-lg bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400">
                     {shiftSettings.period}
                   </span>
                 </div>
@@ -2981,27 +3083,37 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
                     localStorage.setItem('shift_settings', JSON.stringify(next));
                     setRecords(generateRecordsForPeriod(newPeriod, periodStart, records));
                   }}
-                  className="w-full min-h-[46px] px-3.5 py-2.5 text-sm font-semibold border border-gray-300 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-900 text-gray-900 dark:text-white focus:ring-2 focus:ring-indigo-500"
+                  className="w-full min-h-[48px] px-3.5 py-2.5 text-sm font-semibold border border-gray-300 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-900 text-gray-900 dark:text-white focus:ring-2 focus:ring-indigo-500"
                 >
                   <option value="Bi-weekly">Bi-weekly (14 Days - Default)</option>
                   <option value="Weekly">Weekly (7 Days)</option>
                   <option value="Monthly">Monthly</option>
                 </select>
-              </div>
+              </section>
 
-              {/* Shift Notifications & Times */}
-              <div className="p-4 rounded-2xl bg-gray-50/80 dark:bg-slate-800/50 border border-gray-200/80 dark:border-slate-800 space-y-3.5">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h4 className="text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-slate-400 flex items-center gap-1.5">
-                      <Clock className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
-                      <span>Shift Notifications</span>
-                    </h4>
-                    <p className="text-xs text-gray-500 dark:text-slate-400 mt-0.5">
-                      Default shift &amp; lunch schedule for autofill and reminders
-                    </p>
+              {/* Shift Notifications Section - Icon-prefixed Header & Improved Toggle Spacing */}
+              <section
+                aria-label="Shift Notifications"
+                className="p-5 rounded-2xl bg-gray-50/90 dark:bg-slate-800/50 border border-gray-200/90 dark:border-slate-800 space-y-4"
+              >
+                <div className="flex items-center justify-between gap-4">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 rounded-xl bg-emerald-100/80 dark:bg-emerald-950/80 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0">
+                      <Clock className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <h4 className="text-xs font-bold uppercase tracking-wider text-gray-700 dark:text-slate-200">
+                        Shift Notifications
+                      </h4>
+                      <p className="text-xs text-gray-500 dark:text-slate-400 mt-0.5">
+                        Default shift &amp; lunch schedule for autofill and reminders
+                      </p>
+                    </div>
                   </div>
-                  <label className="relative inline-flex items-center cursor-pointer">
+                  <label className="relative inline-flex items-center gap-2.5 cursor-pointer shrink-0 py-1 pl-2">
+                    <span className="text-[11px] font-bold text-gray-500 dark:text-slate-400">
+                      {shiftSettings.enabled ? 'On' : 'Off'}
+                    </span>
                     <input
                       type="checkbox"
                       checked={shiftSettings.enabled}
@@ -3015,13 +3127,13 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
                       }}
                       className="sr-only peer"
                     />
-                    <div className="w-11 h-6 bg-gray-300 dark:bg-slate-700 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-indigo-500 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
+                    <div className="w-11 h-6 bg-gray-300 dark:bg-slate-700 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-indigo-500 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[6px] after:right-[22px] peer-checked:after:right-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
                   </label>
                 </div>
 
-                <div className={`grid grid-cols-2 gap-3 transition-opacity ${shiftSettings.enabled ? '' : 'opacity-50 pointer-events-none'}`}>
+                <div className={`grid grid-cols-2 gap-3.5 pt-1 transition-opacity ${shiftSettings.enabled ? '' : 'opacity-50 pointer-events-none'}`}>
                   <div>
-                    <label className="block text-xs font-semibold text-gray-600 dark:text-slate-300 mb-1">Start Time</label>
+                    <label className="block text-xs font-semibold text-gray-600 dark:text-slate-300 mb-1.5">Start Time</label>
                     <input
                       type="time"
                       value={shiftSettings.startTime}
@@ -3030,11 +3142,11 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
                         setShiftSettings(next);
                         localStorage.setItem('shift_settings', JSON.stringify(next));
                       }}
-                      className="w-full min-h-[42px] px-3 text-sm font-medium border border-gray-300 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-900 text-gray-900 dark:text-white focus:ring-2 focus:ring-indigo-500"
+                      className="w-full min-h-[44px] px-3 text-sm font-medium border border-gray-300 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-900 text-gray-900 dark:text-white focus:ring-2 focus:ring-indigo-500"
                     />
                   </div>
                   <div>
-                    <label className="block text-xs font-semibold text-gray-600 dark:text-slate-300 mb-1">End Time</label>
+                    <label className="block text-xs font-semibold text-gray-600 dark:text-slate-300 mb-1.5">End Time</label>
                     <input
                       type="time"
                       value={shiftSettings.endTime}
@@ -3043,11 +3155,11 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
                         setShiftSettings(next);
                         localStorage.setItem('shift_settings', JSON.stringify(next));
                       }}
-                      className="w-full min-h-[42px] px-3 text-sm font-medium border border-gray-300 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-900 text-gray-900 dark:text-white focus:ring-2 focus:ring-indigo-500"
+                      className="w-full min-h-[44px] px-3 text-sm font-medium border border-gray-300 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-900 text-gray-900 dark:text-white focus:ring-2 focus:ring-indigo-500"
                     />
                   </div>
                   <div>
-                    <label className="block text-xs font-semibold text-gray-600 dark:text-slate-300 mb-1">Lunch Start</label>
+                    <label className="block text-xs font-semibold text-gray-600 dark:text-slate-300 mb-1.5">Lunch Start</label>
                     <input
                       type="time"
                       value={shiftSettings.lunchStart}
@@ -3056,11 +3168,11 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
                         setShiftSettings(next);
                         localStorage.setItem('shift_settings', JSON.stringify(next));
                       }}
-                      className="w-full min-h-[42px] px-3 text-sm font-medium border border-gray-300 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-900 text-gray-900 dark:text-white focus:ring-2 focus:ring-indigo-500"
+                      className="w-full min-h-[44px] px-3 text-sm font-medium border border-gray-300 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-900 text-gray-900 dark:text-white focus:ring-2 focus:ring-indigo-500"
                     />
                   </div>
                   <div>
-                    <label className="block text-xs font-semibold text-gray-600 dark:text-slate-300 mb-1">Lunch End</label>
+                    <label className="block text-xs font-semibold text-gray-600 dark:text-slate-300 mb-1.5">Lunch End</label>
                     <input
                       type="time"
                       value={shiftSettings.lunchEnd}
@@ -3069,17 +3181,30 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
                         setShiftSettings(next);
                         localStorage.setItem('shift_settings', JSON.stringify(next));
                       }}
-                      className="w-full min-h-[42px] px-3 text-sm font-medium border border-gray-300 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-900 text-gray-900 dark:text-white focus:ring-2 focus:ring-indigo-500"
+                      className="w-full min-h-[44px] px-3 text-sm font-medium border border-gray-300 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-900 text-gray-900 dark:text-white focus:ring-2 focus:ring-indigo-500"
                     />
                   </div>
                 </div>
-              </div>
+              </section>
 
-              {/* General Actions in Settings: History, Clear, Logout */}
-              <div className="p-4 rounded-2xl bg-gray-50/80 dark:bg-slate-800/50 border border-gray-200/80 dark:border-slate-800 space-y-2.5">
-                <h4 className="text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-slate-400 mb-1">
-                  Data &amp; History
-                </h4>
+              {/* Data & History Section - Icon-prefixed Header */}
+              <section
+                aria-label="Data and History"
+                className="p-5 rounded-2xl bg-gray-50/90 dark:bg-slate-800/50 border border-gray-200/90 dark:border-slate-800 space-y-3"
+              >
+                <div className="flex items-center gap-2.5 mb-1">
+                  <div className="w-8 h-8 rounded-xl bg-indigo-100/80 dark:bg-indigo-950/80 text-indigo-600 dark:text-indigo-400 flex items-center justify-center shrink-0">
+                    <History className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h4 className="text-xs font-bold uppercase tracking-wider text-gray-700 dark:text-slate-200">
+                      Data &amp; History
+                    </h4>
+                    <p className="text-xs text-gray-500 dark:text-slate-400 mt-0.5">
+                      Review past saved periods or reset current entries
+                    </p>
+                  </div>
+                </div>
 
                 <button
                   type="button"
@@ -3087,7 +3212,7 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
                     setIsSettingsOpen(false);
                     openHistory();
                   }}
-                  className="w-full min-h-[46px] px-4 py-2.5 bg-white dark:bg-slate-900 border border-gray-200 dark:border-slate-700 rounded-xl text-sm font-semibold text-gray-800 dark:text-slate-200 flex items-center justify-between hover:bg-indigo-50/40 dark:hover:bg-slate-800 transition-colors"
+                  className="w-full min-h-[48px] px-4 py-3 bg-white dark:bg-slate-900 border border-gray-200 dark:border-slate-700 rounded-xl text-sm font-semibold text-gray-800 dark:text-slate-200 flex items-center justify-between hover:bg-indigo-50/40 dark:hover:bg-slate-800 transition-colors"
                 >
                   <span className="flex items-center gap-2.5">
                     <History className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
@@ -3102,7 +3227,7 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
                     setIsSettingsOpen(false);
                     setShowClearConfirm(true);
                   }}
-                  className="w-full min-h-[46px] px-4 py-2.5 bg-rose-50/80 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900/50 rounded-xl text-sm font-semibold text-rose-700 dark:text-rose-300 flex items-center justify-between hover:bg-rose-100/80 dark:hover:bg-rose-950/50 transition-colors"
+                  className="w-full min-h-[48px] px-4 py-3 bg-rose-50/80 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900/50 rounded-xl text-sm font-semibold text-rose-700 dark:text-rose-300 flex items-center justify-between hover:bg-rose-100/80 dark:hover:bg-rose-950/50 transition-colors"
                 >
                   <span className="flex items-center gap-2.5">
                     <Trash2 className="w-4 h-4 text-rose-600 dark:text-rose-400" />
@@ -3125,19 +3250,19 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
                     <span>Sign Out ({user.email})</span>
                   </button>
                 )}
-              </div>
+              </section>
 
             </div>
 
             {/* Modal Footer with DONE button */}
-            <div className="px-5 py-3.5 bg-gray-50 dark:bg-slate-800/60 border-t border-gray-100 dark:border-slate-800 flex items-center justify-between">
+            <div className="px-6 py-4 bg-gray-50 dark:bg-slate-800/60 border-t border-gray-100 dark:border-slate-800 flex items-center justify-between">
               <span className="text-[11px] text-gray-400 dark:text-slate-500 font-medium">
                 Changes save automatically
               </span>
               <button
                 type="button"
                 onClick={() => setIsSettingsOpen(false)}
-                className="min-h-[42px] px-6 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-bold shadow-sm active:scale-95 transition-all"
+                className="min-h-[44px] px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-bold shadow-sm active:scale-95 transition-all"
               >
                 Done
               </button>
@@ -3399,15 +3524,18 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
               ) : (
                 filteredHistory.map(([week, data]) => {
                   const periodLabel = String(data.weekOf || data.periodStart || week);
+                  const formattedRange = formatPeriodRange(periodLabel, shiftSettings.period);
                   const totalHrs =
                     data.records?.reduce((acc: number, r: any) => acc + (parseFloat(r.totalHours) || 0), 0).toFixed(2) ||
                     '0.00';
+                  const searchTokens = historySearchTerm.trim().toLowerCase().split(/\s+/).filter(Boolean);
                   const matchingNoteRecord =
-                    historySearchTerm.trim() &&
+                    searchTokens.length > 0 &&
                     Array.isArray(data.records) &&
                     data.records.find(
                       (r: any) =>
-                        r.notes && String(r.notes).toLowerCase().includes(historySearchTerm.trim().toLowerCase())
+                        r.notes &&
+                        searchTokens.some(tok => String(r.notes).toLowerCase().includes(tok))
                     );
 
                   return (
@@ -3421,6 +3549,11 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
                           <span className="font-bold text-sm text-gray-900 dark:text-white">
                             Period: {highlightMatch(periodLabel, historySearchTerm)}
                           </span>
+                          {formattedRange && formattedRange !== periodLabel && (
+                            <span className="text-xs text-gray-500 dark:text-slate-400 font-medium">
+                              ({highlightMatch(formattedRange, historySearchTerm)})
+                            </span>
+                          )}
                           {data.name && (
                             <span className="text-xs bg-indigo-50 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300 px-2 py-0.5 rounded-md font-semibold">
                               {highlightMatch(String(data.name), historySearchTerm)}

@@ -17,6 +17,7 @@ import {
   X,
   AlertTriangle,
   Download,
+  FileText,
 } from 'lucide-react';
 import SignatureCanvas from 'react-signature-canvas';
 import { AbsenceType, AppUser, Company, TimeRecord } from '../types/timeclock';
@@ -682,7 +683,7 @@ export default function MyHoursScreen({
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-200 dark:divide-slate-800">
-                {periodDates.map(({ date: dStr, dayName }) => {
+                {periodDates.map(({ date: dStr, dayName }, rowIdx) => {
                   const isToday = dStr === todayISO;
                   const holiday = holidayMap[dStr];
                   const dayRecords = userPeriodRecords.filter(r => r.date === dStr);
@@ -692,6 +693,8 @@ export default function MyHoursScreen({
                   const isLocked = workRec ? isRecordFullyApproved(workRec, company) : false;
                   const isPendingReq = workRec?.requestStatus === 'Pending';
                   const rowEditable = canEditOwnTime && !isLocked && !isPendingReq;
+                  const trimmedNote = workRec?.comment ? workRec.comment.trim() : '';
+                  const hasNote = trimmedNote.length > 0;
 
                   const evalWork = workRec ? evaluatedMap.get(workRec.id) : undefined;
                   const otherHours = otherRecs.reduce((acc, r) => {
@@ -728,6 +731,29 @@ export default function MyHoursScreen({
                           {isToday && (
                             <span className="text-[10px] font-extrabold bg-indigo-600 text-white px-2 py-0.5 rounded-full uppercase shadow-xs ring-2 ring-indigo-400/50 animate-pulse">
                               Today
+                            </span>
+                          )}
+                          {hasNote && (
+                            <span
+                              tabIndex={0}
+                              aria-label={`Note for ${dayName} (${dStr}): ${trimmedNote}`}
+                              aria-describedby={`myhours-date-note-tooltip-${rowIdx}`}
+                              className="group/date-note relative inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-indigo-50 dark:bg-indigo-950/70 text-indigo-700 dark:text-indigo-300 border border-indigo-200/80 dark:border-indigo-800/70 text-[10px] font-bold cursor-help focus:outline-none focus:ring-2 focus:ring-indigo-500 print:hidden"
+                            >
+                              <span className="w-1.5 h-1.5 rounded-full bg-indigo-600 dark:bg-indigo-400 shrink-0" aria-hidden="true" />
+                              <FileText className="w-2.5 h-2.5 shrink-0" aria-hidden="true" />
+                              <span
+                                id={`myhours-date-note-tooltip-${rowIdx}`}
+                                role="tooltip"
+                                className={`pointer-events-none absolute left-0 ${
+                                  rowIdx === 0 ? 'top-full mt-1.5' : 'bottom-full mb-1.5'
+                                } z-40 w-56 max-w-xs p-2.5 rounded-xl bg-gray-900 dark:bg-slate-800 text-white text-xs font-medium leading-relaxed shadow-xl border border-gray-700 dark:border-slate-600 opacity-0 invisible group-hover/date-note:opacity-100 group-hover/date-note:visible group-focus-within/date-note:opacity-100 group-focus-within/date-note:visible transition-all duration-150 whitespace-normal break-words`}
+                              >
+                                <span className="block text-[10px] font-extrabold uppercase tracking-wider text-indigo-300 mb-0.5">
+                                  {dayName} Note
+                                </span>
+                                <span>{trimmedNote}</span>
+                              </span>
                             </span>
                           )}
                           {holiday && (
@@ -859,17 +885,48 @@ export default function MyHoursScreen({
 
                       {/* NOTES & ABSENCES / ADJUSTMENTS */}
                       <td className="px-2.5 lg:px-3 py-2 align-middle bg-white dark:bg-slate-900 space-y-1">
-                        <input
-                          type="text"
-                          value={workRec?.comment || ''}
-                          disabled={!rowEditable}
-                          readOnly={!rowEditable}
-                          onChange={e =>
-                            handleWorkFieldEdit(dStr, workRec, 'comment', e.target.value)
-                          }
-                          placeholder="e.g., Overtime"
-                          className="w-full text-xs lg:text-sm font-medium text-gray-900 dark:text-white bg-white dark:bg-slate-900 border border-gray-200/80 dark:border-slate-700/80 rounded-lg px-2.5 py-1.5 focus:ring-2 focus:ring-indigo-500 disabled:opacity-75"
-                        />
+                        <div className="relative group/note flex items-center">
+                          <input
+                            type="text"
+                            value={workRec?.comment || ''}
+                            disabled={!rowEditable}
+                            readOnly={!rowEditable}
+                            onChange={e =>
+                              handleWorkFieldEdit(dStr, workRec, 'comment', e.target.value)
+                            }
+                            placeholder="e.g., Overtime"
+                            aria-label={`Notes for ${dayName}, ${dStr}`}
+                            aria-describedby={hasNote ? `myhours-note-tooltip-${rowIdx}` : undefined}
+                            className={`w-full text-xs lg:text-sm font-medium text-gray-900 dark:text-white bg-white dark:bg-slate-900 border rounded-lg py-1.5 focus:ring-2 focus:ring-indigo-500 disabled:opacity-75 transition-colors ${
+                              hasNote
+                                ? 'pl-2.5 pr-7 border-indigo-300 dark:border-indigo-700/80 bg-indigo-50/15 dark:bg-indigo-950/20'
+                                : 'px-2.5 border-gray-200/80 dark:border-slate-700/80'
+                            }`}
+                          />
+                          {hasNote && (
+                            <>
+                              <span
+                                className="absolute right-2 top-1/2 -translate-y-1/2 inline-flex items-center justify-center w-4 h-4 rounded-full bg-indigo-100 dark:bg-indigo-900/70 text-indigo-600 dark:text-indigo-300 pointer-events-none print:hidden"
+                                aria-hidden="true"
+                              >
+                                <FileText className="w-2.5 h-2.5" />
+                              </span>
+                              <div
+                                id={`myhours-note-tooltip-${rowIdx}`}
+                                role="tooltip"
+                                className={`pointer-events-none absolute right-0 ${
+                                  rowIdx === 0 ? 'top-full mt-1.5' : 'bottom-full mb-1.5'
+                                } z-40 w-60 max-w-xs p-2.5 rounded-xl bg-gray-900 dark:bg-slate-800 text-white text-xs font-medium leading-relaxed shadow-xl border border-gray-700 dark:border-slate-600 opacity-0 invisible group-hover/note:opacity-100 group-hover/note:visible group-focus-within/note:opacity-100 group-focus-within/note:visible transition-all duration-150 whitespace-normal break-words print:hidden`}
+                              >
+                                <div className="flex items-center gap-1.5 text-[10px] font-extrabold uppercase tracking-wider text-indigo-300 mb-0.5">
+                                  <FileText className="w-3 h-3 shrink-0" aria-hidden="true" />
+                                  <span>{dayName} Note</span>
+                                </div>
+                                <div>{trimmedNote}</div>
+                              </div>
+                            </>
+                          )}
+                        </div>
                         {otherRecs.map(or => (
                           <div
                             key={or.id}
