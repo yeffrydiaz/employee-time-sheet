@@ -355,6 +355,7 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
   const sigCanvas = useRef<SignatureCanvas>(null);
   const emailContainerRef = useRef<HTMLDivElement>(null);
   const dayCardRefs = useRef<(HTMLDivElement | null)[]>([]);
+  const timeCellRefs = useRef<Record<string, HTMLInputElement | null>>({});
 
   // Canvas stroke history for Undo / Redo
   const [canvasHistory, setCanvasHistory] = useState<any[]>([]);
@@ -825,60 +826,64 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
     return null;
   };
 
-  const handleTimeCellKeyDown = (
-    e: React.KeyboardEvent<HTMLInputElement>,
-    rowIndex: number,
-    colIndex: number
-  ) => {
-    const totalCols = 4;
-    let targetRow = rowIndex;
-    let targetCol = colIndex;
+  const handleTimeCellKeyDown = useCallback(
+    (
+      e: React.KeyboardEvent<HTMLInputElement>,
+      rowIndex: number,
+      colIndex: number
+    ) => {
+      const totalRows = records.length;
+      const totalCols = 4; // 0: Time In, 1: Lunch Start, 2: Lunch End, 3: Time Out
+      if (totalRows === 0) return;
 
-    if (e.key === 'ArrowDown') {
-      if (rowIndex < records.length - 1) {
-        targetRow = rowIndex + 1;
-      } else {
-        return;
-      }
-    } else if (e.key === 'ArrowUp') {
-      if (rowIndex > 0) {
-        targetRow = rowIndex - 1;
-      } else {
-        return;
-      }
-    } else if (e.key === 'ArrowRight') {
-      if (colIndex < totalCols - 1) {
-        targetCol = colIndex + 1;
-      } else if (rowIndex < records.length - 1) {
-        targetRow = rowIndex + 1;
+      let targetRow = rowIndex;
+      let targetCol = colIndex;
+
+      if (e.key === 'ArrowDown' || (e.key === 'Enter' && !e.shiftKey)) {
+        targetRow = (rowIndex + 1) % totalRows;
+      } else if (e.key === 'ArrowUp' || (e.key === 'Enter' && e.shiftKey)) {
+        targetRow = (rowIndex - 1 + totalRows) % totalRows;
+      } else if (e.key === 'ArrowRight') {
+        if (colIndex < totalCols - 1) {
+          targetCol = colIndex + 1;
+        } else {
+          targetRow = (rowIndex + 1) % totalRows;
+          targetCol = 0;
+        }
+      } else if (e.key === 'ArrowLeft') {
+        if (colIndex > 0) {
+          targetCol = colIndex - 1;
+        } else {
+          targetRow = (rowIndex - 1 + totalRows) % totalRows;
+          targetCol = totalCols - 1;
+        }
+      } else if (e.key === 'Home') {
         targetCol = 0;
-      } else {
-        return;
-      }
-    } else if (e.key === 'ArrowLeft') {
-      if (colIndex > 0) {
-        targetCol = colIndex - 1;
-      } else if (rowIndex > 0) {
-        targetRow = rowIndex - 1;
+      } else if (e.key === 'End') {
         targetCol = totalCols - 1;
       } else {
         return;
       }
-    } else {
-      return;
-    }
 
-    e.preventDefault();
-    const nextInput = document.querySelector<HTMLInputElement>(
-      `input[data-timesheet-row="${targetRow}"][data-timesheet-col="${targetCol}"]`
-    );
-    if (nextInput) {
-      nextInput.focus();
-      try {
-        nextInput.select?.();
-      } catch {}
-    }
-  };
+      e.preventDefault();
+      e.stopPropagation();
+
+      const nextInput =
+        timeCellRefs.current[`${targetRow}-${targetCol}`] ||
+        document.querySelector<HTMLInputElement>(
+          `input[data-timesheet-row="${targetRow}"][data-timesheet-col="${targetCol}"]`
+        );
+
+      if (nextInput) {
+        nextInput.focus();
+        nextInput.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+        try {
+          nextInput.select?.();
+        } catch {}
+      }
+    },
+    [records.length]
+  );
 
   const [actionNotice, setActionNotice] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
@@ -2432,15 +2437,18 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
                       </td>
 
                       {/* TIME IN: STRICT PURE WHITE, LARGE BOLD */}
-                      <td className="px-2.5 lg:px-3 py-2 align-middle bg-white dark:bg-slate-900">
+                      <td className="px-2.5 lg:px-3 py-2 align-middle bg-white dark:bg-slate-900 focus-within:ring-2 focus-within:ring-inset focus-within:ring-indigo-500/60 transition-shadow">
                         <div className="flex flex-col gap-1">
                           <input
+                            ref={el => {
+                              timeCellRefs.current[`${index}-0`] = el;
+                            }}
                             type="time"
                             value={record.timeIn}
                             data-timesheet-row={index}
                             data-timesheet-col={0}
                             aria-label={`${record.day} ${record.date} Time In`}
-                            onKeyDown={e => handleTimeCellKeyDown(e, index, 0)}
+                            onKeyDownCapture={e => handleTimeCellKeyDown(e, index, 0)}
                             onClick={e => {
                               try {
                                 (e.currentTarget as any).showPicker?.();
@@ -2462,15 +2470,18 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
                       </td>
 
                       {/* LUNCH START: STRICT LIGHT YELLOW #FEF9C3 ONLY */}
-                      <td className="px-2 lg:px-2.5 py-2 align-middle bg-[#FEF9C3] dark:bg-amber-950/40">
+                      <td className="px-2 lg:px-2.5 py-2 align-middle bg-[#FEF9C3] dark:bg-amber-950/40 focus-within:ring-2 focus-within:ring-inset focus-within:ring-amber-500/70 transition-shadow">
                         <div className="flex flex-col gap-1">
                           <input
+                            ref={el => {
+                              timeCellRefs.current[`${index}-1`] = el;
+                            }}
                             type="time"
                             value={record.lunchStart}
                             data-timesheet-row={index}
                             data-timesheet-col={1}
                             aria-label={`${record.day} ${record.date} Lunch Start`}
-                            onKeyDown={e => handleTimeCellKeyDown(e, index, 1)}
+                            onKeyDownCapture={e => handleTimeCellKeyDown(e, index, 1)}
                             onClick={e => {
                               try {
                                 (e.currentTarget as any).showPicker?.();
@@ -2492,15 +2503,18 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
                       </td>
 
                       {/* LUNCH END: STRICT LIGHT YELLOW #FEF9C3 ONLY */}
-                      <td className="px-2 lg:px-2.5 py-2 align-middle bg-[#FEF9C3] dark:bg-amber-950/40">
+                      <td className="px-2 lg:px-2.5 py-2 align-middle bg-[#FEF9C3] dark:bg-amber-950/40 focus-within:ring-2 focus-within:ring-inset focus-within:ring-amber-500/70 transition-shadow">
                         <div className="flex flex-col gap-1">
                           <input
+                            ref={el => {
+                              timeCellRefs.current[`${index}-2`] = el;
+                            }}
                             type="time"
                             value={record.lunchEnd}
                             data-timesheet-row={index}
                             data-timesheet-col={2}
                             aria-label={`${record.day} ${record.date} Lunch End`}
-                            onKeyDown={e => handleTimeCellKeyDown(e, index, 2)}
+                            onKeyDownCapture={e => handleTimeCellKeyDown(e, index, 2)}
                             onClick={e => {
                               try {
                                 (e.currentTarget as any).showPicker?.();
@@ -2522,15 +2536,18 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
                       </td>
 
                       {/* TIME OUT: STRICT PURE WHITE, LARGE BOLD */}
-                      <td className="px-2.5 lg:px-3 py-2 align-middle bg-white dark:bg-slate-900">
+                      <td className="px-2.5 lg:px-3 py-2 align-middle bg-white dark:bg-slate-900 focus-within:ring-2 focus-within:ring-inset focus-within:ring-indigo-500/60 transition-shadow">
                         <div className="flex flex-col gap-1">
                           <input
+                            ref={el => {
+                              timeCellRefs.current[`${index}-3`] = el;
+                            }}
                             type="time"
                             value={record.timeOut}
                             data-timesheet-row={index}
                             data-timesheet-col={3}
                             aria-label={`${record.day} ${record.date} Time Out`}
-                            onKeyDown={e => handleTimeCellKeyDown(e, index, 3)}
+                            onKeyDownCapture={e => handleTimeCellKeyDown(e, index, 3)}
                             onClick={e => {
                               try {
                                 (e.currentTarget as any).showPicker?.();
