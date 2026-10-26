@@ -31,7 +31,8 @@ import {
   Copy,
   Download,
   Wrench,
-  FileText
+  FileText,
+  Bell
 } from 'lucide-react';
 import SignatureCanvas from 'react-signature-canvas';
 import { motion, AnimatePresence } from 'motion/react';
@@ -632,39 +633,231 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
     }
   };
 
-  const handleTimeAction = (action: 'clockIn' | 'startLunch' | 'endLunch' | 'clockOut') => {
+  const handleTimeAction = useCallback((action: 'clockIn' | 'startLunch' | 'endLunch' | 'clockOut') => {
     const currentTime = getCurrentTime();
     const idx = todayRecordIndex >= 0 ? todayRecordIndex : 0;
-    const todayRecord = records[idx];
-    const newRecords = [...records];
-    const updatedRecord = { ...todayRecord };
+    setRecords(prevRecords => {
+      const todayRecord = prevRecords[idx];
+      if (!todayRecord) return prevRecords;
+      const newRecords = [...prevRecords];
+      const updatedRecord = { ...todayRecord };
 
-    if (action === 'clockIn') {
-      updatedRecord.timeIn = currentTime;
-      if (todayRecord.timeIn && todayRecord.timeOut) {
-        updatedRecord.timeOut = '';
-        updatedRecord.lunchStart = '';
-        updatedRecord.lunchEnd = '';
+      if (action === 'clockIn') {
+        updatedRecord.timeIn = currentTime;
+        if (todayRecord.timeIn && todayRecord.timeOut) {
+          updatedRecord.timeOut = '';
+          updatedRecord.lunchStart = '';
+          updatedRecord.lunchEnd = '';
+        }
+        if (!todayRecord.date) {
+          updatedRecord.date = getTodayDate();
+        }
+      } else if (action === 'startLunch') {
+        updatedRecord.lunchStart = currentTime;
+      } else if (action === 'endLunch') {
+        updatedRecord.lunchEnd = currentTime;
+      } else if (action === 'clockOut') {
+        updatedRecord.timeOut = currentTime;
       }
-      if (!todayRecord.date) {
-        updatedRecord.date = getTodayDate();
-      }
-    } else if (action === 'startLunch') {
-      updatedRecord.lunchStart = currentTime;
-    } else if (action === 'endLunch') {
-      updatedRecord.lunchEnd = currentTime;
-    } else if (action === 'clockOut') {
-      updatedRecord.timeOut = currentTime;
-    }
 
-    newRecords[idx] = updatedRecord;
-    setRecords(newRecords);
+      newRecords[idx] = updatedRecord;
+      return newRecords;
+    });
 
     // Make sure today's card is open
-    if (!expandedDays.includes(idx)) {
-      setExpandedDays(prev => [...prev, idx]);
+    setExpandedDays(prev => (prev.includes(idx) ? prev : [...prev, idx]));
+  }, [todayRecordIndex]);
+
+  // PWA Shift Alerts (Clock In, Lunch In, Lunch Out, Clock Out)
+  const [activeShiftAlert, setActiveShiftAlert] = useState<{
+    id: string;
+    title: string;
+    message: string;
+    action: 'clockIn' | 'startLunch' | 'endLunch' | 'clockOut';
+    actionLabel: string;
+    scheduledTime: string;
+  } | null>(null);
+
+  const [notificationPermission, setNotificationPermission] = useState<string>(() => {
+    if (typeof window !== 'undefined' && 'Notification' in window) {
+      return Notification.permission;
     }
-  };
+    return 'unsupported';
+  });
+
+  const playShiftAlertChime = useCallback(() => {
+    try {
+      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+      if (!AudioCtx) return;
+      const ctx = new AudioCtx();
+      const now = ctx.currentTime;
+      const osc1 = ctx.createOscillator();
+      const osc2 = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc1.type = 'sine';
+      osc2.type = 'sine';
+      osc1.frequency.setValueAtTime(587.33, now); // D5
+      osc2.frequency.setValueAtTime(880, now + 0.16); // A5
+      gain.gain.setValueAtTime(0.15, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.45);
+      osc1.connect(gain);
+      osc2.connect(gain);
+      gain.connect(ctx.destination);
+      osc1.start(now);
+      osc1.stop(now + 0.15);
+      osc2.start(now + 0.16);
+      osc2.stop(now + 0.45);
+    } catch {}
+  }, []);
+
+  const triggerPWAAlert = useCallback(
+    (alertItem: {
+      id: string;
+      title: string;
+      message: string;
+      action: 'clockIn' | 'startLunch' | 'endLunch' | 'clockOut';
+      actionLabel: string;
+      scheduledTime: string;
+    }) => {
+      setActiveShiftAlert(alertItem);
+      playShiftAlertChime();
+      try {
+        navigator.vibrate?.([200, 100, 200]);
+      } catch {}
+
+      if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
+        const notifOptions: NotificationOptions = {
+          body: alertItem.message,
+          icon: '/favicon.svg',
+          badge: '/favicon.svg',
+          tag: alertItem.id,
+          data: { shiftAction: alertItem.action },
+        };
+        if ('serviceWorker' in navigator) {
+          navigator.serviceWorker.ready
+            .then(reg => reg.showNotification(alertItem.title, notifOptions))
+            .catch(() => {
+              try {
+                new Notification(alertItem.title, notifOptions);
+              } catch {}
+            });
+        } else {
+          try {
+            new Notification(alertItem.title, notifOptions);
+          } catch {}
+        }
+      }
+    },
+    [playShiftAlertChime]
+  );
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !('serviceWorker' in navigator)) return;
+    const onMessage = (event: MessageEvent) => {
+      if (event.data?.type === 'TSM_SHIFT_ALERT_ACTION' && event.data?.shiftAction) {
+        handleTimeAction(event.data.shiftAction);
+        setActiveShiftAlert(null);
+      }
+    };
+    navigator.serviceWorker.addEventListener('message', onMessage);
+    return () => navigator.serviceWorker.removeEventListener('message', onMessage);
+  }, [handleTimeAction]);
+
+  useEffect(() => {
+    if (!shiftSettings.enabled) {
+      setActiveShiftAlert(null);
+      return;
+    }
+
+    const checkShiftSchedule = () => {
+      const now = new Date();
+      const currentHHMM = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+      const todayISO = getTodayDate();
+      const idx = records.findIndex(r => r.date === todayISO);
+      const todayRec = idx >= 0 ? records[idx] : records[0];
+
+      let notifiedMap: Record<string, boolean> = {};
+      try {
+        notifiedMap = JSON.parse(localStorage.getItem('tsm_notified_shift_events_v1') || '{}');
+      } catch {
+        notifiedMap = {};
+      }
+
+      const scheduleEvents: Array<{
+        key: 'clockIn' | 'startLunch' | 'endLunch' | 'clockOut';
+        time: string;
+        alreadyLogged: boolean;
+        title: string;
+        message: string;
+        actionLabel: string;
+      }> = [
+        {
+          key: 'clockIn',
+          time: shiftSettings.startTime,
+          alreadyLogged: Boolean(todayRec?.timeIn),
+          title: 'Time to Clock In',
+          message: `It's ${shiftSettings.startTime} — your scheduled shift is starting. Tap to Clock In now.`,
+          actionLabel: 'Clock In Now',
+        },
+        {
+          key: 'startLunch',
+          time: shiftSettings.lunchStart,
+          alreadyLogged: Boolean(todayRec?.lunchStart),
+          title: 'Time to Lunch In (Start Lunch)',
+          message: `It's ${shiftSettings.lunchStart} — time for your scheduled lunch break (minimum 30 mins policy).`,
+          actionLabel: 'Lunch In Now',
+        },
+        {
+          key: 'endLunch',
+          time: shiftSettings.lunchEnd,
+          alreadyLogged: Boolean(todayRec?.lunchEnd),
+          title: 'Time to Lunch Out (End Lunch)',
+          message: `It's ${shiftSettings.lunchEnd} — your scheduled lunch break is ending. Tap to Lunch Out.`,
+          actionLabel: 'Lunch Out Now',
+        },
+        {
+          key: 'clockOut',
+          time: shiftSettings.endTime,
+          alreadyLogged: Boolean(todayRec?.timeOut),
+          title: 'Time to Clock Out',
+          message: `It's ${shiftSettings.endTime} — your scheduled shift has ended. Tap to Clock Out now.`,
+          actionLabel: 'Clock Out Now',
+        },
+      ];
+
+      for (const ev of scheduleEvents) {
+        if (!ev.time || ev.alreadyLogged) continue;
+        const eventStorageKey = `${todayISO}_${ev.key}_${ev.time}`;
+        if (currentHHMM === ev.time && !notifiedMap[eventStorageKey]) {
+          notifiedMap[eventStorageKey] = true;
+          try {
+            localStorage.setItem('tsm_notified_shift_events_v1', JSON.stringify(notifiedMap));
+          } catch {}
+          triggerPWAAlert({
+            id: eventStorageKey,
+            title: ev.title,
+            message: ev.message,
+            action: ev.key,
+            actionLabel: ev.actionLabel,
+            scheduledTime: ev.time,
+          });
+          break;
+        }
+      }
+    };
+
+    checkShiftSchedule();
+    const intervalId = window.setInterval(checkShiftSchedule, 10000);
+    return () => window.clearInterval(intervalId);
+  }, [
+    shiftSettings.enabled,
+    shiftSettings.startTime,
+    shiftSettings.lunchStart,
+    shiftSettings.lunchEnd,
+    shiftSettings.endTime,
+    records,
+    triggerPWAAlert,
+  ]);
 
   // Canvas Undo / Redo
   const handleCanvasEnd = () => {
@@ -818,8 +1011,9 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
       if (tIn !== null && tOut !== null && (lEnd - lStart) >= (tOut - tIn)) {
         return 'Lunch duration exceeds shift duration';
       }
-      if (lEnd - lStart < 30) {
-        return `Lunch break is ${lEnd - lStart} min (< 30 min standard break policy)`;
+      const lunchGapMinutes = lEnd - lStart;
+      if (lunchGapMinutes < 30) {
+        return `Lunch break is ${lunchGapMinutes} min — standard break policy requires at least 30 minutes`;
       }
     }
 
@@ -1279,6 +1473,54 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
   return (
     <main className="min-h-screen bg-gray-50 dark:bg-[#0b0f19] text-gray-900 dark:text-gray-100 py-3 sm:py-6 px-2.5 sm:px-5 lg:px-8 pb-28 md:pb-12 print:bg-white pdf:bg-white print:p-0 pdf:p-0">
       <div id="timesheet-content" className="max-w-7xl print:max-w-full pdf:max-w-full mx-auto space-y-4 sm:space-y-6">
+
+        {/* PWA Shift Alert Banner (Clock In / Lunch In / Lunch Out / Clock Out) */}
+        {activeShiftAlert && (
+          <div
+            role="alert"
+            className="rounded-2xl p-3.5 sm:p-4 bg-gradient-to-r from-indigo-600 to-indigo-700 text-white shadow-lg border border-indigo-400/40 flex flex-col sm:flex-row sm:items-center justify-between gap-3 print:hidden pdf:hidden animate-fadeIn"
+          >
+            <div className="flex items-start sm:items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-white/15 flex items-center justify-center shrink-0">
+                <Bell className="w-5 h-5 text-amber-300 animate-bounce" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs sm:text-sm font-extrabold tracking-tight">
+                    {activeShiftAlert.title}
+                  </span>
+                  <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-white/20">
+                    {activeShiftAlert.scheduledTime}
+                  </span>
+                </div>
+                <p className="text-xs text-indigo-100 mt-0.5 leading-snug">
+                  {activeShiftAlert.message}
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 self-end sm:self-auto shrink-0">
+              <button
+                type="button"
+                onClick={() => {
+                  handleTimeAction(activeShiftAlert.action);
+                  setActiveShiftAlert(null);
+                  showNotice('success', `${activeShiftAlert.actionLabel.replace(' Now', '')} recorded at ${getCurrentTime()}`);
+                }}
+                className="min-h-[40px] px-4 py-2 rounded-xl bg-white text-indigo-700 hover:bg-indigo-50 text-xs font-extrabold shadow-sm active:scale-95 transition-all"
+              >
+                {activeShiftAlert.actionLabel}
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveShiftAlert(null)}
+                className="p-2 rounded-xl text-indigo-100 hover:text-white hover:bg-white/10 transition-colors"
+                aria-label="Dismiss shift alert"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* In-App PDF / Validation Notice Banner */}
         {actionNotice && (
@@ -2051,20 +2293,16 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
                         {/* TIME IN & TIME OUT: STRICT PURE WHITE BACKGROUND #FFFFFF - HERO TYPOGRAPHY */}
                         <div className="grid grid-cols-2 gap-2 sm:gap-3">
                           {/* TIME IN */}
-                          <div className="bg-white dark:bg-slate-900 p-2.5 rounded-xl border border-gray-200 dark:border-slate-700 space-y-1">
-                            <div className="flex items-center justify-between">
-                              <span className="text-xs font-extrabold uppercase tracking-wider text-emerald-700 dark:text-emerald-400 flex items-center gap-1">
-                                <LogIn className="w-4 h-4 text-emerald-600" />
-                                Time In
-                              </span>
-                              <button
-                                type="button"
-                                onClick={() => handleRecordChange(index, 'timeIn', getCurrentTime())}
-                                className="min-h-[36px] min-w-[44px] px-2 py-0.5 text-xs font-bold text-indigo-700 bg-indigo-50 dark:bg-indigo-900/30 rounded-lg active:scale-95"
-                              >
-                                Now
-                              </button>
-                            </div>
+                          <div className="bg-white dark:bg-slate-900 p-2.5 rounded-xl border border-gray-200 dark:border-slate-700 space-y-1.5">
+                            <button
+                              type="button"
+                              onClick={() => handleRecordChange(index, 'timeIn', getCurrentTime())}
+                              title="Tap to set Time In to current time"
+                              className="w-full min-h-[38px] px-3 py-1.5 rounded-xl bg-emerald-50 hover:bg-emerald-100/90 dark:bg-emerald-950/60 dark:hover:bg-emerald-900/60 border border-emerald-300 dark:border-emerald-700/80 text-xs font-extrabold uppercase tracking-wider text-emerald-800 dark:text-emerald-300 flex items-center justify-center gap-1.5 shadow-2xs active:scale-95 transition-all"
+                            >
+                              <LogIn className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                              <span>Time In</span>
+                            </button>
                             <input
                               type="time"
                               value={record.timeIn}
@@ -2080,20 +2318,16 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
                           </div>
 
                           {/* TIME OUT */}
-                          <div className="bg-white dark:bg-slate-900 p-2.5 rounded-xl border border-gray-200 dark:border-slate-700 space-y-1">
-                            <div className="flex items-center justify-between">
-                              <span className="text-xs font-extrabold uppercase tracking-wider text-rose-700 dark:text-rose-400 flex items-center gap-1">
-                                <LogOut className="w-4 h-4 text-rose-600" />
-                                Time Out
-                              </span>
-                              <button
-                                type="button"
-                                onClick={() => handleRecordChange(index, 'timeOut', getCurrentTime())}
-                                className="min-h-[36px] min-w-[44px] px-2 py-0.5 text-xs font-bold text-indigo-700 bg-indigo-50 dark:bg-indigo-900/30 rounded-lg active:scale-95"
-                              >
-                                Now
-                              </button>
-                            </div>
+                          <div className="bg-white dark:bg-slate-900 p-2.5 rounded-xl border border-gray-200 dark:border-slate-700 space-y-1.5">
+                            <button
+                              type="button"
+                              onClick={() => handleRecordChange(index, 'timeOut', getCurrentTime())}
+                              title="Tap to set Time Out to current time"
+                              className="w-full min-h-[38px] px-3 py-1.5 rounded-xl bg-rose-50 hover:bg-rose-100/90 dark:bg-rose-950/60 dark:hover:bg-rose-900/60 border border-rose-300 dark:border-rose-700/80 text-xs font-extrabold uppercase tracking-wider text-rose-800 dark:text-rose-300 flex items-center justify-center gap-1.5 shadow-2xs active:scale-95 transition-all"
+                            >
+                              <LogOut className="w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0" />
+                              <span>Time Out</span>
+                            </button>
                             <input
                               type="time"
                               value={record.timeOut}
@@ -2109,23 +2343,19 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
                           </div>
                         </div>
 
-                        {/* LUNCH START & LUNCH END: STRICT LIGHT YELLOW #FEF9C3 ONLY */}
+                        {/* LUNCH IN & LUNCH OUT: STRICT LIGHT YELLOW #FEF9C3 ONLY */}
                         <div className="grid grid-cols-2 gap-2 sm:gap-3">
-                          {/* LUNCH START */}
-                          <div className="bg-[#FEF9C3] dark:bg-amber-950/40 p-2.5 rounded-xl border border-amber-300/80 dark:border-amber-700/60 space-y-1">
-                            <div className="flex items-center justify-between">
-                              <span className="text-xs font-bold uppercase tracking-wider text-amber-900 dark:text-amber-200 flex items-center gap-1">
-                                <Utensils className="w-3.5 h-3.5 text-amber-700 dark:text-amber-300" />
-                                Lunch Start
-                              </span>
-                              <button
-                                type="button"
-                                onClick={() => handleRecordChange(index, 'lunchStart', getCurrentTime())}
-                                className="min-h-[36px] min-w-[44px] px-2 py-0.5 text-xs font-bold text-amber-900 bg-amber-100 dark:bg-amber-900/50 rounded-lg active:scale-95"
-                              >
-                                Now
-                              </button>
-                            </div>
+                          {/* LUNCH IN (LUNCH START) */}
+                          <div className="bg-[#FEF9C3] dark:bg-amber-950/40 p-2.5 rounded-xl border border-amber-300/80 dark:border-amber-700/60 space-y-1.5">
+                            <button
+                              type="button"
+                              onClick={() => handleRecordChange(index, 'lunchStart', getCurrentTime())}
+                              title="Tap to set Lunch In to current time"
+                              className="w-full min-h-[38px] px-3 py-1.5 rounded-xl bg-amber-200/80 hover:bg-amber-300/80 dark:bg-amber-900/70 dark:hover:bg-amber-800/70 border border-amber-400/90 dark:border-amber-600 text-xs font-extrabold uppercase tracking-wider text-amber-950 dark:text-amber-100 flex items-center justify-center gap-1.5 shadow-2xs active:scale-95 transition-all"
+                            >
+                              <Utensils className="w-3.5 h-3.5 text-amber-800 dark:text-amber-300 shrink-0" />
+                              <span>Lunch In</span>
+                            </button>
                             <input
                               type="time"
                               value={record.lunchStart}
@@ -2140,21 +2370,17 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
                             {errors.lunchStart && <p className="text-xs text-rose-600">{errors.lunchStart}</p>}
                           </div>
 
-                          {/* LUNCH END */}
-                          <div className="bg-[#FEF9C3] dark:bg-amber-950/40 p-2.5 rounded-xl border border-amber-300/80 dark:border-amber-700/60 space-y-1">
-                            <div className="flex items-center justify-between">
-                              <span className="text-xs font-bold uppercase tracking-wider text-amber-900 dark:text-amber-200 flex items-center gap-1">
-                                <Utensils className="w-3.5 h-3.5 text-amber-700 dark:text-amber-300" />
-                                Lunch End
-                              </span>
-                              <button
-                                type="button"
-                                onClick={() => handleRecordChange(index, 'lunchEnd', getCurrentTime())}
-                                className="min-h-[36px] min-w-[44px] px-2 py-0.5 text-xs font-bold text-amber-900 bg-amber-100 dark:bg-amber-900/50 rounded-lg active:scale-95"
-                              >
-                                Now
-                              </button>
-                            </div>
+                          {/* LUNCH OUT (LUNCH END) */}
+                          <div className="bg-[#FEF9C3] dark:bg-amber-950/40 p-2.5 rounded-xl border border-amber-300/80 dark:border-amber-700/60 space-y-1.5">
+                            <button
+                              type="button"
+                              onClick={() => handleRecordChange(index, 'lunchEnd', getCurrentTime())}
+                              title="Tap to set Lunch Out to current time"
+                              className="w-full min-h-[38px] px-3 py-1.5 rounded-xl bg-amber-200/80 hover:bg-amber-300/80 dark:bg-amber-900/70 dark:hover:bg-amber-800/70 border border-amber-400/90 dark:border-amber-600 text-xs font-extrabold uppercase tracking-wider text-amber-950 dark:text-amber-100 flex items-center justify-center gap-1.5 shadow-2xs active:scale-95 transition-all"
+                            >
+                              <Utensils className="w-3.5 h-3.5 text-amber-800 dark:text-amber-300 shrink-0" />
+                              <span>Lunch Out</span>
+                            </button>
                             <input
                               type="time"
                               value={record.lunchEnd}
@@ -2249,7 +2475,12 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
                           <div className="flex items-start gap-2 p-2.5 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/60 rounded-xl text-xs text-amber-900 dark:text-amber-200 animate-fadeIn">
                             <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400 flex-shrink-0 mt-0.5" />
                             <div className="leading-snug">
-                              <span className="font-bold">Invalid time entry:</span> {dayWarning}
+                              <span className="font-bold">
+                                {dayWarning.includes('standard break policy')
+                                  ? 'Break Policy Notice:'
+                                  : 'Invalid time entry:'}
+                              </span>{' '}
+                              {dayWarning}
                             </div>
                           </div>
                         )}
@@ -2570,7 +2801,7 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
 
                       {/* TOTAL HRS: EXTRA LARGE BOLD, WHITE BACKGROUND */}
                       <td className="px-2 py-2 align-middle text-center bg-white dark:bg-slate-900">
-                        <div className="flex flex-col items-center justify-center">
+                        <div className="relative group/warning flex flex-col items-center justify-center">
                           <div className="flex items-center justify-center gap-1">
                             <span className={`text-xl lg:text-2xl font-black font-mono print:text-[14px] pdf:text-[14px] ${
                               dayWarning ? 'text-amber-600 dark:text-amber-400' : 'text-gray-900 dark:text-white'
@@ -2578,7 +2809,12 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
                               {record.totalHours || '0.00'}
                             </span>
                             {dayWarning ? (
-                              <span className="text-amber-500 cursor-help print:hidden pdf:hidden" title={dayWarning}>
+                              <span
+                                tabIndex={0}
+                                aria-label={dayWarning}
+                                className="text-amber-500 cursor-help print:hidden pdf:hidden focus:outline-none"
+                                title={dayWarning}
+                              >
                                 <AlertTriangle className="w-3.5 h-3.5" />
                               </span>
                             ) : record.totalHours && parseFloat(record.totalHours) > 0 ? (
@@ -2588,9 +2824,32 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
                             ) : null}
                           </div>
                           {dayWarning && (
-                            <span className="text-[10px] text-amber-600 dark:text-amber-400 font-medium leading-tight print:hidden pdf:hidden max-w-[95px] truncate" title={dayWarning}>
-                              {dayWarning}
-                            </span>
+                            <>
+                              <span
+                                className="text-[10px] text-amber-700 dark:text-amber-300 font-semibold leading-tight print:hidden pdf:hidden max-w-[105px] truncate cursor-help"
+                                title={dayWarning}
+                              >
+                                {dayWarning.includes('standard break policy')
+                                  ? '< 30m break policy'
+                                  : dayWarning}
+                              </span>
+                              <div
+                                role="tooltip"
+                                className={`pointer-events-none absolute right-0 ${
+                                  index === 0 ? 'top-full mt-1.5' : 'bottom-full mb-1.5'
+                                } z-40 w-64 p-2.5 rounded-xl bg-amber-950 text-amber-50 text-xs font-medium leading-snug text-left shadow-xl border border-amber-700 opacity-0 invisible group-hover/warning:opacity-100 group-hover/warning:visible group-focus-within/warning:opacity-100 group-focus-within/warning:visible transition-all duration-150 whitespace-normal print:hidden pdf:hidden`}
+                              >
+                                <div className="flex items-center gap-1.5 text-[10px] font-extrabold uppercase tracking-wider text-amber-300 mb-0.5">
+                                  <AlertTriangle className="w-3 h-3 shrink-0" />
+                                  <span>
+                                    {dayWarning.includes('standard break policy')
+                                      ? 'Standard Break Policy'
+                                      : 'Validation Warning'}
+                                  </span>
+                                </div>
+                                <div>{dayWarning}</div>
+                              </div>
+                            </>
                           )}
                           {!dayWarning && record.totalHours && parseFloat(record.totalHours) > 0 && (
                             <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-medium leading-tight print:hidden pdf:hidden flex items-center gap-0.5">
@@ -3213,7 +3472,7 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
                         setShiftSettings(next);
                         localStorage.setItem('shift_settings', JSON.stringify(next));
                         if (e.target.checked && typeof Notification !== 'undefined' && Notification.permission === 'default') {
-                          Notification.requestPermission();
+                          Notification.requestPermission().then(perm => setNotificationPermission(perm));
                         }
                       }}
                       className="sr-only peer"
@@ -3276,6 +3535,49 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
                     />
                   </div>
                 </div>
+
+                {shiftSettings.enabled && (
+                  <div className="pt-2 border-t border-gray-200/70 dark:border-slate-700/70 flex flex-wrap items-center justify-between gap-2">
+                    <div className="text-[11px] text-gray-500 dark:text-slate-400 flex items-center gap-1.5">
+                      <Bell className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                      <span>
+                        {notificationPermission === 'granted'
+                          ? 'PWA & in-app shift alerts active'
+                          : 'In-app & audio alerts active'}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {notificationPermission === 'default' && typeof Notification !== 'undefined' && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            Notification.requestPermission().then(perm => setNotificationPermission(perm));
+                          }}
+                          className="px-2.5 py-1.5 rounded-lg text-[11px] font-bold bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 hover:bg-indigo-100 transition-colors"
+                        >
+                          Enable Browser Alerts
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          triggerPWAAlert({
+                            id: `test_${Date.now()}`,
+                            title: 'Shift Alert Preview',
+                            message: `PWA shift alerts are active for Clock In (${shiftSettings.startTime}), Lunch In (${shiftSettings.lunchStart}), Lunch Out (${shiftSettings.lunchEnd}), and Clock Out (${shiftSettings.endTime}).`,
+                            action: 'clockIn',
+                            actionLabel: 'Clock In Now',
+                            scheduledTime: getCurrentTime(),
+                          });
+                          setIsSettingsOpen(false);
+                        }}
+                        className="px-2.5 py-1.5 rounded-lg text-[11px] font-bold bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 hover:bg-emerald-100 transition-colors"
+                      >
+                        Test Alert
+                      </button>
+                    </div>
+                  </div>
+                )}
               </section>
 
               {/* Data & History Section - Icon-prefixed Header */}
