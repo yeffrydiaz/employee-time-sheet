@@ -817,9 +817,67 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
       if (tIn !== null && tOut !== null && (lEnd - lStart) >= (tOut - tIn)) {
         return 'Lunch duration exceeds shift duration';
       }
+      if (lEnd - lStart < 30) {
+        return `Lunch break is ${lEnd - lStart} min (< 30 min standard break policy)`;
+      }
     }
 
     return null;
+  };
+
+  const handleTimeCellKeyDown = (
+    e: React.KeyboardEvent<HTMLInputElement>,
+    rowIndex: number,
+    colIndex: number
+  ) => {
+    const totalCols = 4;
+    let targetRow = rowIndex;
+    let targetCol = colIndex;
+
+    if (e.key === 'ArrowDown') {
+      if (rowIndex < records.length - 1) {
+        targetRow = rowIndex + 1;
+      } else {
+        return;
+      }
+    } else if (e.key === 'ArrowUp') {
+      if (rowIndex > 0) {
+        targetRow = rowIndex - 1;
+      } else {
+        return;
+      }
+    } else if (e.key === 'ArrowRight') {
+      if (colIndex < totalCols - 1) {
+        targetCol = colIndex + 1;
+      } else if (rowIndex < records.length - 1) {
+        targetRow = rowIndex + 1;
+        targetCol = 0;
+      } else {
+        return;
+      }
+    } else if (e.key === 'ArrowLeft') {
+      if (colIndex > 0) {
+        targetCol = colIndex - 1;
+      } else if (rowIndex > 0) {
+        targetRow = rowIndex - 1;
+        targetCol = totalCols - 1;
+      } else {
+        return;
+      }
+    } else {
+      return;
+    }
+
+    e.preventDefault();
+    const nextInput = document.querySelector<HTMLInputElement>(
+      `input[data-timesheet-row="${targetRow}"][data-timesheet-col="${targetCol}"]`
+    );
+    if (nextInput) {
+      nextInput.focus();
+      try {
+        nextInput.select?.();
+      } catch {}
+    }
   };
 
   const [actionNotice, setActionNotice] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
@@ -2379,13 +2437,17 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
                           <input
                             type="time"
                             value={record.timeIn}
+                            data-timesheet-row={index}
+                            data-timesheet-col={0}
+                            aria-label={`${record.day} ${record.date} Time In`}
+                            onKeyDown={e => handleTimeCellKeyDown(e, index, 0)}
                             onClick={e => {
                               try {
                                 (e.currentTarget as any).showPicker?.();
                               } catch {}
                             }}
                             onChange={e => handleRecordChange(index, 'timeIn', e.target.value)}
-                            className="time-input-mono w-full text-[19px] lg:text-[22px] xl:text-[24px] font-black font-mono tracking-tight tabular-nums text-gray-900 dark:text-white bg-white dark:bg-slate-900 border-none p-0 focus:ring-0 cursor-pointer print:text-[14px] pdf:text-[14px]"
+                            className="time-input-mono w-full text-[19px] lg:text-[22px] xl:text-[24px] font-black font-mono tracking-tight tabular-nums text-gray-900 dark:text-white bg-white dark:bg-slate-900 border-none p-0 rounded focus:ring-2 focus:ring-indigo-500/40 cursor-pointer print:text-[14px] pdf:text-[14px]"
                           />
                           <div className="flex justify-start print:hidden pdf:hidden opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-within:opacity-100 focus-within:pointer-events-auto transition-opacity duration-150">
                             <button
@@ -2405,13 +2467,17 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
                           <input
                             type="time"
                             value={record.lunchStart}
+                            data-timesheet-row={index}
+                            data-timesheet-col={1}
+                            aria-label={`${record.day} ${record.date} Lunch Start`}
+                            onKeyDown={e => handleTimeCellKeyDown(e, index, 1)}
                             onClick={e => {
                               try {
                                 (e.currentTarget as any).showPicker?.();
                               } catch {}
                             }}
                             onChange={e => handleRecordChange(index, 'lunchStart', e.target.value)}
-                            className="time-input-mono w-full text-[15px] lg:text-[16px] xl:text-[17px] font-bold font-mono tracking-tight tabular-nums text-gray-900 dark:text-amber-100 bg-transparent border-none p-0 focus:ring-0 cursor-pointer print:text-[12px] pdf:text-[12px]"
+                            className="time-input-mono w-full text-[15px] lg:text-[16px] xl:text-[17px] font-bold font-mono tracking-tight tabular-nums text-gray-900 dark:text-amber-100 bg-transparent border-none p-0 rounded focus:ring-2 focus:ring-amber-500/50 cursor-pointer print:text-[12px] pdf:text-[12px]"
                           />
                           <div className="flex justify-start print:hidden pdf:hidden opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-within:opacity-100 focus-within:pointer-events-auto transition-opacity duration-150">
                             <button
@@ -2431,13 +2497,17 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
                           <input
                             type="time"
                             value={record.lunchEnd}
+                            data-timesheet-row={index}
+                            data-timesheet-col={2}
+                            aria-label={`${record.day} ${record.date} Lunch End`}
+                            onKeyDown={e => handleTimeCellKeyDown(e, index, 2)}
                             onClick={e => {
                               try {
                                 (e.currentTarget as any).showPicker?.();
                               } catch {}
                             }}
                             onChange={e => handleRecordChange(index, 'lunchEnd', e.target.value)}
-                            className="time-input-mono w-full text-[15px] lg:text-[16px] xl:text-[17px] font-bold font-mono tracking-tight tabular-nums text-gray-900 dark:text-amber-100 bg-transparent border-none p-0 focus:ring-0 cursor-pointer print:text-[12px] pdf:text-[12px]"
+                            className="time-input-mono w-full text-[15px] lg:text-[16px] xl:text-[17px] font-bold font-mono tracking-tight tabular-nums text-gray-900 dark:text-amber-100 bg-transparent border-none p-0 rounded focus:ring-2 focus:ring-amber-500/50 cursor-pointer print:text-[12px] pdf:text-[12px]"
                           />
                           <div className="flex justify-start print:hidden pdf:hidden opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-within:opacity-100 focus-within:pointer-events-auto transition-opacity duration-150">
                             <button
@@ -2457,13 +2527,17 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
                           <input
                             type="time"
                             value={record.timeOut}
+                            data-timesheet-row={index}
+                            data-timesheet-col={3}
+                            aria-label={`${record.day} ${record.date} Time Out`}
+                            onKeyDown={e => handleTimeCellKeyDown(e, index, 3)}
                             onClick={e => {
                               try {
                                 (e.currentTarget as any).showPicker?.();
                               } catch {}
                             }}
                             onChange={e => handleRecordChange(index, 'timeOut', e.target.value)}
-                            className="time-input-mono w-full text-[19px] lg:text-[22px] xl:text-[24px] font-black font-mono tracking-tight tabular-nums text-gray-900 dark:text-white bg-white dark:bg-slate-900 border-none p-0 focus:ring-0 cursor-pointer print:text-[14px] pdf:text-[14px]"
+                            className="time-input-mono w-full text-[19px] lg:text-[22px] xl:text-[24px] font-black font-mono tracking-tight tabular-nums text-gray-900 dark:text-white bg-white dark:bg-slate-900 border-none p-0 rounded focus:ring-2 focus:ring-indigo-500/40 cursor-pointer print:text-[14px] pdf:text-[14px]"
                           />
                           <div className="flex justify-start print:hidden pdf:hidden opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-within:opacity-100 focus-within:pointer-events-auto transition-opacity duration-150">
                             <button

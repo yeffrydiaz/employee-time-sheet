@@ -141,6 +141,20 @@ export default function PunchClockScreen({
 
   const isClockedIn = Boolean(openRecord);
 
+  const latestClosedPunchToday = useMemo(() => {
+    const closed = todayRecords.filter(r => !r.workingNow && Boolean(r.timeOut));
+    if (closed.length === 0) return null;
+    return closed.reduce((latest, curr) => {
+      const latestOut = parseTimeToMinutes(latest.timeOut) ?? -1;
+      const currOut = parseTimeToMinutes(curr.timeOut) ?? -1;
+      if (currOut > latestOut) return curr;
+      if (currOut === latestOut) {
+        return (curr.createdAt || '') >= (latest.createdAt || '') ? curr : latest;
+      }
+      return latest;
+    }, closed[0]);
+  }, [todayRecords]);
+
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col">
       {/* Top Bar */}
@@ -250,6 +264,10 @@ export default function PunchClockScreen({
               <span>
                 Clocked in at {formatTimeDisplay(openRecord.timeIn, company.timeFormat)} •{' '}
                 {elapsedSoFarLabel}
+              </span>
+            ) : latestClosedPunchToday ? (
+              <span>
+                Clocked out at {formatTimeDisplay(latestClosedPunchToday.timeOut, company.timeFormat)}
               </span>
             ) : (
               <span className="text-slate-500">Not clocked in today</span>

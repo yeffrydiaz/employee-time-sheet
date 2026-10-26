@@ -475,6 +475,7 @@ export interface AdminReportPdfOptions {
   rows: string[][];
   footerRow?: string[];
   footerTotalRow?: string[];
+  footerRows?: string[][];
   filename: string;
 }
 
@@ -595,27 +596,45 @@ export function exportAdminReportVectorPDF(opts: AdminReportPdfOptions): void {
     y += rowH;
   });
 
-  const resolvedFooterRow = opts.footerTotalRow || opts.footerRow;
-  if (resolvedFooterRow && resolvedFooterRow.length === opts.headers.length) {
+  const resolvedFooterRows: string[][] =
+    opts.footerRows && opts.footerRows.length > 0
+      ? opts.footerRows
+      : opts.footerTotalRow || opts.footerRow
+      ? [opts.footerTotalRow || opts.footerRow!]
+      : [];
+
+  resolvedFooterRows.forEach(fRow => {
+    if (!fRow || fRow.length !== opts.headers.length) return;
     if (y + 8.5 > pageHeight - 14) {
       pdf.addPage();
       pageNumber += 1;
       y = drawReportPageHeader(pageNumber);
     }
+    const isSubtotal = String(fRow[0] || '').toLowerCase().includes('subtotal');
     let curX = margin;
-    resolvedFooterRow.forEach((cellVal, cIdx) => {
+    fRow.forEach((cellVal, cIdx) => {
       const w = colWidths[cIdx];
-      pdf.setFillColor(15, 23, 42);
-      pdf.setDrawColor(15, 23, 42);
-      pdf.rect(curX, y, w, 8.5, 'FD');
-
-      pdf.setFont('helvetica', 'bold');
-      pdf.setFontSize(8);
-      pdf.setTextColor(255, 255, 255);
-      pdf.text(String(cellVal ?? ''), curX + 2.5, y + 5.6);
+      if (isSubtotal) {
+        pdf.setFillColor(241, 245, 249);
+        pdf.setDrawColor(203, 213, 225);
+        pdf.rect(curX, y, w, 8, 'FD');
+        pdf.setFont('helvetica', 'bold');
+        pdf.setFontSize(8);
+        pdf.setTextColor(15, 23, 42);
+        pdf.text(String(cellVal ?? ''), curX + 2.5, y + 5.3);
+      } else {
+        pdf.setFillColor(15, 23, 42);
+        pdf.setDrawColor(15, 23, 42);
+        pdf.rect(curX, y, w, 8.5, 'FD');
+        pdf.setFont('helvetica', 'bold');
+        pdf.setFontSize(8);
+        pdf.setTextColor(255, 255, 255);
+        pdf.text(String(cellVal ?? ''), curX + 2.5, y + 5.6);
+      }
       curX += w;
     });
-  }
+    y += isSubtotal ? 8 : 8.5;
+  });
 
   pdf.save(opts.filename);
 }

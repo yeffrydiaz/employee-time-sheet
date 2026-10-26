@@ -736,7 +736,7 @@ export function ReportsView({
           formatHours(s.otHours, company.timeTotalsFormat),
           formatHours(s.paidHours, company.timeTotalsFormat),
           `${company.currencySymbol}${emp.payRate.toFixed(2)}`,
-          `${company.currencySymbol}${gross.toFixed(2)}`,
+          `${company.currencySymbol}${gross.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
         ]);
       }
       return { headers, rows };
@@ -762,9 +762,98 @@ export function ReportsView({
     return { headers, rows };
   };
 
+  const companyOverallSummary = useMemo(() => {
+    const evals = filteredPeriodRecords
+      .map(r => evaluatedMap.get(r.id))
+      .filter((x): x is EvaluatedRecord => Boolean(x));
+    return summarizeEvaluatedRecords(evals);
+  }, [filteredPeriodRecords, evaluatedMap]);
+
+  const formatCurrencyAmount = (val: number) =>
+    `${company.currencySymbol}${val.toLocaleString('en-US', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    })}`;
+
+  const buildFooterRows = (): string[][] => {
+    if (selectedReport === 'Timecard Detail') {
+      return [
+        [
+          'COMPANY TOTAL',
+          '',
+          '',
+          '',
+          '',
+          '',
+          formatHours(companyOverallSummary.regHours, company.timeTotalsFormat),
+          formatHours(companyOverallSummary.otHours, company.timeTotalsFormat),
+          formatHours(
+            companyOverallSummary.paidAbsenceHours + companyOverallSummary.unpaidAbsenceHours,
+            company.timeTotalsFormat
+          ),
+          formatHours(companyOverallSummary.paidHours, company.timeTotalsFormat),
+          formatHours(companyOverallSummary.unpaidHours, company.timeTotalsFormat),
+          formatHours(companyOverallSummary.totalHours, company.timeTotalsFormat),
+        ],
+      ];
+    }
+    if (selectedReport === 'Timecard Summary') {
+      return [
+        [
+          'COMPANY TOTAL',
+          '',
+          formatHours(companyOverallSummary.regHours, company.timeTotalsFormat),
+          formatHours(companyOverallSummary.otHours, company.timeTotalsFormat),
+          formatHours(
+            companyOverallSummary.paidAbsenceHours + companyOverallSummary.unpaidAbsenceHours,
+            company.timeTotalsFormat
+          ),
+          formatHours(companyOverallSummary.paidHours, company.timeTotalsFormat),
+          formatHours(companyOverallSummary.unpaidHours, company.timeTotalsFormat),
+          formatHours(companyOverallSummary.totalHours, company.timeTotalsFormat),
+        ],
+      ];
+    }
+    if (selectedReport === 'Payroll Summary') {
+      let hourlyGrossSubtotal = 0;
+      let salarySubtotal = 0;
+      for (const emp of targetEmployees) {
+        const empRecs = filteredPeriodRecords.filter(r => r.userId === emp.id);
+        const s = summarizeEvaluatedRecords(
+          empRecs.map(r => evaluatedMap.get(r.id)).filter((x): x is EvaluatedRecord => Boolean(x))
+        );
+        const gross =
+          emp.rateType === 'Salary' ? emp.payRate : s.paidHours * emp.payRate + s.amountAdjustment;
+        if (emp.rateType === 'Hourly') {
+          hourlyGrossSubtotal += gross;
+        } else if (emp.rateType === 'Salary') {
+          salarySubtotal += gross;
+        }
+      }
+      const combinedGrossTotal = hourlyGrossSubtotal + salarySubtotal;
+      return [
+        [
+          'Company Total',
+          '',
+          '',
+          formatHours(companyOverallSummary.regHours, company.timeTotalsFormat),
+          formatHours(companyOverallSummary.otHours, company.timeTotalsFormat),
+          formatHours(companyOverallSummary.paidHours, company.timeTotalsFormat),
+          '—',
+          '—',
+        ],
+        ['Hourly Gross Subtotal', '', '', '', '', '', '', formatCurrencyAmount(hourlyGrossSubtotal)],
+        ['Salary Subtotal', '', '', '', '', '', '', formatCurrencyAmount(salarySubtotal)],
+        ['Combined Total', '', '', '', '', '', '', formatCurrencyAmount(combinedGrossTotal)],
+      ];
+    }
+    return [];
+  };
+
   const handleDownloadCSV = () => {
     const { headers, rows } = buildReportExportRows();
-    const csvContent = [headers, ...rows]
+    const footerRows = buildFooterRows();
+    const csvContent = [headers, ...rows, ...footerRows]
       .map(r => r.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(','))
       .join('\n');
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
@@ -778,77 +867,11 @@ export function ReportsView({
 
   const handleDownloadExcel = () => {
     const { headers, rows } = buildReportExportRows();
-    const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+    const footerRows = buildFooterRows();
+    const ws = XLSX.utils.aoa_to_sheet([headers, ...rows, ...footerRows]);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Report');
     XLSX.writeFile(wb, `${selectedReport.replace(/\s+/g, '_')}_${fromDate}_${toDate}.xlsx`);
-  };
-
-  const companyOverallSummary = useMemo(() => {
-    const evals = filteredPeriodRecords
-      .map(r => evaluatedMap.get(r.id))
-      .filter((x): x is EvaluatedRecord => Boolean(x));
-    return summarizeEvaluatedRecords(evals);
-  }, [filteredPeriodRecords, evaluatedMap]);
-
-  const buildFooterTotalRow = (): string[] | undefined => {
-    if (selectedReport === 'Timecard Detail') {
-      return [
-        'COMPANY TOTAL',
-        '',
-        '',
-        '',
-        '',
-        '',
-        formatHours(companyOverallSummary.regHours, company.timeTotalsFormat),
-        formatHours(companyOverallSummary.otHours, company.timeTotalsFormat),
-        formatHours(
-          companyOverallSummary.paidAbsenceHours + companyOverallSummary.unpaidAbsenceHours,
-          company.timeTotalsFormat
-        ),
-        formatHours(companyOverallSummary.paidHours, company.timeTotalsFormat),
-        formatHours(companyOverallSummary.unpaidHours, company.timeTotalsFormat),
-        formatHours(companyOverallSummary.totalHours, company.timeTotalsFormat),
-      ];
-    }
-    if (selectedReport === 'Timecard Summary') {
-      return [
-        'COMPANY TOTAL',
-        '',
-        formatHours(companyOverallSummary.regHours, company.timeTotalsFormat),
-        formatHours(companyOverallSummary.otHours, company.timeTotalsFormat),
-        formatHours(
-          companyOverallSummary.paidAbsenceHours + companyOverallSummary.unpaidAbsenceHours,
-          company.timeTotalsFormat
-        ),
-        formatHours(companyOverallSummary.paidHours, company.timeTotalsFormat),
-        formatHours(companyOverallSummary.unpaidHours, company.timeTotalsFormat),
-        formatHours(companyOverallSummary.totalHours, company.timeTotalsFormat),
-      ];
-    }
-    if (selectedReport === 'Payroll Summary') {
-      let totalGross = 0;
-      for (const emp of targetEmployees) {
-        const empRecs = filteredPeriodRecords.filter(r => r.userId === emp.id);
-        const s = summarizeEvaluatedRecords(
-          empRecs.map(r => evaluatedMap.get(r.id)).filter((x): x is EvaluatedRecord => Boolean(x))
-        );
-        const gross =
-          emp.rateType === 'Salary' ? emp.payRate : s.paidHours * emp.payRate + s.amountAdjustment;
-        totalGross += gross;
-      }
-      return [
-        'COMPANY TOTAL',
-        '',
-        '',
-        formatHours(companyOverallSummary.regHours, company.timeTotalsFormat),
-        formatHours(companyOverallSummary.otHours, company.timeTotalsFormat),
-        formatHours(companyOverallSummary.paidHours, company.timeTotalsFormat),
-        '—',
-        `${company.currencySymbol}${totalGross.toFixed(2)}`,
-      ];
-    }
-    return undefined;
   };
 
   const handleDownloadPDF = () => {
@@ -860,7 +883,7 @@ export function ReportsView({
       toDate: formatDateDisplay(toDate, company.dateFormat),
       headers,
       rows,
-      footerTotalRow: buildFooterTotalRow(),
+      footerRows: buildFooterRows(),
       filename: `${selectedReport.replace(/\s+/g, '_')}_${fromDate}_${toDate}.pdf`,
     });
   };
@@ -1278,7 +1301,8 @@ export function ReportsView({
             </thead>
             <tbody className="divide-y divide-slate-200">
               {(() => {
-                let companyGrossTotal = 0;
+                let hourlyGrossSubtotal = 0;
+                let salarySubtotal = 0;
                 const rows = targetEmployees.map(emp => {
                   const empRecs = filteredPeriodRecords.filter(r => r.userId === emp.id);
                   const s = summarizeEvaluatedRecords(
@@ -1290,7 +1314,11 @@ export function ReportsView({
                     emp.rateType === 'Salary'
                       ? emp.payRate
                       : s.paidHours * emp.payRate + s.amountAdjustment;
-                  companyGrossTotal += gross;
+                  if (emp.rateType === 'Hourly') {
+                    hourlyGrossSubtotal += gross;
+                  } else if (emp.rateType === 'Salary') {
+                    salarySubtotal += gross;
+                  }
                   return (
                     <tr key={emp.id} className="hover:bg-slate-50">
                       <td className="px-3 py-2.5 font-sans font-bold text-slate-900">
@@ -1319,32 +1347,53 @@ export function ReportsView({
                         {emp.rateType === 'Salary' ? ' / period' : ' / hr'}
                       </td>
                       <td className="px-3 py-2.5 text-right font-bold text-slate-900">
-                        {company.currencySymbol}
-                        {gross.toFixed(2)}
+                        {formatCurrencyAmount(gross)}
                       </td>
                     </tr>
                   );
                 });
+                const combinedGrossTotal = hourlyGrossSubtotal + salarySubtotal;
                 return (
                   <>
                     {rows}
-                    <tr className="bg-slate-900 text-white font-bold">
-                      <td colSpan={3} className="px-3 py-3 font-sans">
+                    <tr className="bg-slate-100 text-slate-800 font-bold border-t-2 border-slate-300">
+                      <td colSpan={3} className="px-3 py-2.5 font-sans">
                         Company Total
                       </td>
-                      <td className="px-3 py-3 text-right">
+                      <td className="px-3 py-2.5 text-right">
                         {formatHours(companyOverallSummary.regHours, company.timeTotalsFormat)}
                       </td>
-                      <td className="px-3 py-3 text-right">
+                      <td className="px-3 py-2.5 text-right">
                         {formatHours(companyOverallSummary.otHours, company.timeTotalsFormat)}
                       </td>
-                      <td className="px-3 py-3 text-right">
+                      <td className="px-3 py-2.5 text-right">
                         {formatHours(companyOverallSummary.paidHours, company.timeTotalsFormat)}
                       </td>
-                      <td className="px-3 py-3 text-right">—</td>
+                      <td className="px-3 py-2.5 text-right">—</td>
+                      <td className="px-3 py-2.5 text-right">—</td>
+                    </tr>
+                    <tr className="bg-slate-50 text-slate-700 font-semibold">
+                      <td colSpan={7} className="px-3 py-2 font-sans text-right">
+                        Hourly Gross Subtotal
+                      </td>
+                      <td className="px-3 py-2 text-right text-slate-900 font-bold">
+                        {formatCurrencyAmount(hourlyGrossSubtotal)}
+                      </td>
+                    </tr>
+                    <tr className="bg-slate-50 text-slate-700 font-semibold">
+                      <td colSpan={7} className="px-3 py-2 font-sans text-right">
+                        Salary Subtotal
+                      </td>
+                      <td className="px-3 py-2 text-right text-slate-900 font-bold">
+                        {formatCurrencyAmount(salarySubtotal)}
+                      </td>
+                    </tr>
+                    <tr className="bg-slate-900 text-white font-bold">
+                      <td colSpan={7} className="px-3 py-3 font-sans text-right">
+                        Combined Total
+                      </td>
                       <td className="px-3 py-3 text-right">
-                        {company.currencySymbol}
-                        {companyGrossTotal.toFixed(2)}
+                        {formatCurrencyAmount(combinedGrossTotal)}
                       </td>
                     </tr>
                   </>
