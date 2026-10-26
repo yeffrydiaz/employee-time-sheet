@@ -32,7 +32,8 @@ import {
   Download,
   Wrench,
   FileText,
-  Bell
+  Bell,
+  HelpCircle
 } from 'lucide-react';
 import SignatureCanvas from 'react-signature-canvas';
 import { motion, AnimatePresence } from 'motion/react';
@@ -404,6 +405,7 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
         setShowAuthModal(false);
         setShowEmailHistory(false);
         setIsCompanyDropdownOpen(false);
+        setOverwriteTimeConfirm(null);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -578,11 +580,38 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
   const [mobileToolMenuDayIndex, setMobileToolMenuDayIndex] = useState<number | null>(null);
   const [copyConfirmDayIndex, setCopyConfirmDayIndex] = useState<number | null>(null);
+  const [overwriteTimeConfirm, setOverwriteTimeConfirm] = useState<{
+    dayIndex: number;
+    field: 'timeIn' | 'timeOut' | 'lunchStart' | 'lunchEnd';
+    label: string;
+    existingValue: string;
+    proposedValue: string;
+  } | null>(null);
 
   const handleRecordChange = (index: number, field: keyof DailyRecord, value: string) => {
     const updated = [...records];
     updated[index] = { ...updated[index], [field]: value };
     setRecords(updated);
+  };
+
+  const handleQuickTimeButtonTap = (
+    index: number,
+    field: 'timeIn' | 'timeOut' | 'lunchStart' | 'lunchEnd',
+    label: string
+  ) => {
+    const currentVal = records[index]?.[field] || '';
+    const nowTime = getCurrentTime();
+    if (currentVal) {
+      setOverwriteTimeConfirm({
+        dayIndex: index,
+        field,
+        label,
+        existingValue: currentVal,
+        proposedValue: nowTime,
+      });
+      return;
+    }
+    handleRecordChange(index, field, nowTime);
   };
 
   const copyPreviousDay = (index: number) => {
@@ -2296,12 +2325,23 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
                           <div className="bg-white dark:bg-slate-900 p-2.5 rounded-xl border border-gray-200 dark:border-slate-700 space-y-1.5">
                             <button
                               type="button"
-                              onClick={() => handleRecordChange(index, 'timeIn', getCurrentTime())}
-                              title="Tap to set Time In to current time"
-                              className="w-full min-h-[38px] px-3 py-1.5 rounded-xl bg-emerald-50 hover:bg-emerald-100/90 dark:bg-emerald-950/60 dark:hover:bg-emerald-900/60 border border-emerald-300 dark:border-emerald-700/80 text-xs font-extrabold uppercase tracking-wider text-emerald-800 dark:text-emerald-300 flex items-center justify-center gap-1.5 shadow-2xs active:scale-95 transition-all"
+                              onClick={() => handleQuickTimeButtonTap(index, 'timeIn', 'Time In')}
+                              title={
+                                record.timeIn
+                                  ? `Time In already set (${record.timeIn}) — tap to confirm update`
+                                  : 'Tap to set Time In to current time'
+                              }
+                              className={`w-full min-h-[38px] px-3 py-1.5 rounded-xl border text-xs font-extrabold uppercase tracking-wider flex items-center justify-center gap-1.5 shadow-2xs active:scale-95 transition-all ${
+                                record.timeIn
+                                  ? 'bg-emerald-50/60 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-800/60 text-emerald-700/80 dark:text-emerald-400/80'
+                                  : 'bg-emerald-50 hover:bg-emerald-100/90 dark:bg-emerald-950/60 dark:hover:bg-emerald-900/60 border-emerald-300 dark:border-emerald-700/80 text-emerald-800 dark:text-emerald-300'
+                              }`}
                             >
                               <LogIn className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
                               <span>Time In</span>
+                              {record.timeIn && (
+                                <Check className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                              )}
                             </button>
                             <input
                               type="time"
@@ -2321,12 +2361,23 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
                           <div className="bg-white dark:bg-slate-900 p-2.5 rounded-xl border border-gray-200 dark:border-slate-700 space-y-1.5">
                             <button
                               type="button"
-                              onClick={() => handleRecordChange(index, 'timeOut', getCurrentTime())}
-                              title="Tap to set Time Out to current time"
-                              className="w-full min-h-[38px] px-3 py-1.5 rounded-xl bg-rose-50 hover:bg-rose-100/90 dark:bg-rose-950/60 dark:hover:bg-rose-900/60 border border-rose-300 dark:border-rose-700/80 text-xs font-extrabold uppercase tracking-wider text-rose-800 dark:text-rose-300 flex items-center justify-center gap-1.5 shadow-2xs active:scale-95 transition-all"
+                              onClick={() => handleQuickTimeButtonTap(index, 'timeOut', 'Time Out')}
+                              title={
+                                record.timeOut
+                                  ? `Time Out already set (${record.timeOut}) — tap to confirm update`
+                                  : 'Tap to set Time Out to current time'
+                              }
+                              className={`w-full min-h-[38px] px-3 py-1.5 rounded-xl border text-xs font-extrabold uppercase tracking-wider flex items-center justify-center gap-1.5 shadow-2xs active:scale-95 transition-all ${
+                                record.timeOut
+                                  ? 'bg-rose-50/60 dark:bg-rose-950/30 border-rose-200 dark:border-rose-800/60 text-rose-700/80 dark:text-rose-400/80'
+                                  : 'bg-rose-50 hover:bg-rose-100/90 dark:bg-rose-950/60 dark:hover:bg-rose-900/60 border-rose-300 dark:border-rose-700/80 text-rose-800 dark:text-rose-300'
+                              }`}
                             >
                               <LogOut className="w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0" />
                               <span>Time Out</span>
+                              {record.timeOut && (
+                                <Check className="w-3.5 h-3.5 text-rose-600 dark:text-rose-400 shrink-0" />
+                              )}
                             </button>
                             <input
                               type="time"
@@ -2349,12 +2400,23 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
                           <div className="bg-[#FEF9C3] dark:bg-amber-950/40 p-2.5 rounded-xl border border-amber-300/80 dark:border-amber-700/60 space-y-1.5">
                             <button
                               type="button"
-                              onClick={() => handleRecordChange(index, 'lunchStart', getCurrentTime())}
-                              title="Tap to set Lunch In to current time"
-                              className="w-full min-h-[38px] px-3 py-1.5 rounded-xl bg-amber-200/80 hover:bg-amber-300/80 dark:bg-amber-900/70 dark:hover:bg-amber-800/70 border border-amber-400/90 dark:border-amber-600 text-xs font-extrabold uppercase tracking-wider text-amber-950 dark:text-amber-100 flex items-center justify-center gap-1.5 shadow-2xs active:scale-95 transition-all"
+                              onClick={() => handleQuickTimeButtonTap(index, 'lunchStart', 'Lunch In')}
+                              title={
+                                record.lunchStart
+                                  ? `Lunch In already set (${record.lunchStart}) — tap to confirm update`
+                                  : 'Tap to set Lunch In to current time'
+                              }
+                              className={`w-full min-h-[38px] px-3 py-1.5 rounded-xl border text-xs font-extrabold uppercase tracking-wider flex items-center justify-center gap-1.5 shadow-2xs active:scale-95 transition-all ${
+                                record.lunchStart
+                                  ? 'bg-amber-200/50 dark:bg-amber-900/40 border-amber-300/80 dark:border-amber-700/60 text-amber-900/80 dark:text-amber-200/80'
+                                  : 'bg-amber-200/80 hover:bg-amber-300/80 dark:bg-amber-900/70 dark:hover:bg-amber-800/70 border-amber-400/90 dark:border-amber-600 text-amber-950 dark:text-amber-100'
+                              }`}
                             >
                               <Utensils className="w-3.5 h-3.5 text-amber-800 dark:text-amber-300 shrink-0" />
                               <span>Lunch In</span>
+                              {record.lunchStart && (
+                                <Check className="w-3.5 h-3.5 text-amber-800 dark:text-amber-300 shrink-0" />
+                              )}
                             </button>
                             <input
                               type="time"
@@ -2374,12 +2436,23 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
                           <div className="bg-[#FEF9C3] dark:bg-amber-950/40 p-2.5 rounded-xl border border-amber-300/80 dark:border-amber-700/60 space-y-1.5">
                             <button
                               type="button"
-                              onClick={() => handleRecordChange(index, 'lunchEnd', getCurrentTime())}
-                              title="Tap to set Lunch Out to current time"
-                              className="w-full min-h-[38px] px-3 py-1.5 rounded-xl bg-amber-200/80 hover:bg-amber-300/80 dark:bg-amber-900/70 dark:hover:bg-amber-800/70 border border-amber-400/90 dark:border-amber-600 text-xs font-extrabold uppercase tracking-wider text-amber-950 dark:text-amber-100 flex items-center justify-center gap-1.5 shadow-2xs active:scale-95 transition-all"
+                              onClick={() => handleQuickTimeButtonTap(index, 'lunchEnd', 'Lunch Out')}
+                              title={
+                                record.lunchEnd
+                                  ? `Lunch Out already set (${record.lunchEnd}) — tap to confirm update`
+                                  : 'Tap to set Lunch Out to current time'
+                              }
+                              className={`w-full min-h-[38px] px-3 py-1.5 rounded-xl border text-xs font-extrabold uppercase tracking-wider flex items-center justify-center gap-1.5 shadow-2xs active:scale-95 transition-all ${
+                                record.lunchEnd
+                                  ? 'bg-amber-200/50 dark:bg-amber-900/40 border-amber-300/80 dark:border-amber-700/60 text-amber-900/80 dark:text-amber-200/80'
+                                  : 'bg-amber-200/80 hover:bg-amber-300/80 dark:bg-amber-900/70 dark:hover:bg-amber-800/70 border-amber-400/90 dark:border-amber-600 text-amber-950 dark:text-amber-100'
+                              }`}
                             >
                               <Utensils className="w-3.5 h-3.5 text-amber-800 dark:text-amber-300 shrink-0" />
                               <span>Lunch Out</span>
+                              {record.lunchEnd && (
+                                <Check className="w-3.5 h-3.5 text-amber-800 dark:text-amber-300 shrink-0" />
+                              )}
                             </button>
                             <input
                               type="time"
@@ -2919,9 +2992,32 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
             {/* Signature Section */}
             <div className="space-y-3 print:space-y-1.5 min-w-0">
               <div className="flex items-center justify-between">
-                <label className="block text-xs font-bold uppercase tracking-wider text-gray-600 dark:text-slate-400">
-                  Employee Signature
-                </label>
+                <div className="flex items-center gap-1.5">
+                  <label className="block text-xs font-bold uppercase tracking-wider text-gray-600 dark:text-slate-400">
+                    Employee Signature
+                  </label>
+                  <div className="relative group/sig-help inline-flex items-center print:hidden pdf:hidden">
+                    <button
+                      type="button"
+                      aria-label="Draw signature help"
+                      aria-describedby="signature-help-tooltip"
+                      className="text-gray-400 hover:text-indigo-600 dark:text-slate-500 dark:hover:text-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/40 rounded-full p-0.5 transition-colors"
+                    >
+                      <HelpCircle className="w-3.5 h-3.5" />
+                    </button>
+                    <div
+                      id="signature-help-tooltip"
+                      role="tooltip"
+                      className="pointer-events-none invisible opacity-0 group-hover/sig-help:visible group-hover/sig-help:opacity-100 group-focus-within/sig-help:visible group-focus-within/sig-help:opacity-100 transition-all duration-150 absolute bottom-full left-0 mb-2 w-64 p-2.5 bg-slate-900 dark:bg-slate-800 text-white text-[11px] leading-relaxed rounded-xl shadow-xl border border-slate-700/80 z-30"
+                    >
+                      <p className="font-semibold text-indigo-300 mb-0.5">Draw Signature Help</p>
+                      <p className="text-slate-200">
+                        Use your <span className="font-semibold text-white">mouse or finger</span> to sign inside the canvas, or switch to <span className="font-semibold text-white">&apos;Type Name&apos;</span> mode if preferred.
+                      </p>
+                      <div className="absolute top-full left-2 -mt-1 border-4 border-transparent border-t-slate-900 dark:border-t-slate-800" />
+                    </div>
+                  </div>
+                </div>
 
                 {/* Draw vs Type Mode Selector */}
                 <div className="flex items-center gap-1 bg-gray-100 dark:bg-slate-800 p-1 rounded-xl print:hidden pdf:hidden">
@@ -2959,7 +3055,7 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
 
               {signatureMode === 'draw' ? (
                 <div>
-                  <div className="border border-gray-300 dark:border-slate-700 rounded-2xl bg-white dark:bg-slate-800 overflow-hidden shadow-inner">
+                  <div className="relative border border-gray-300 dark:border-slate-700 rounded-2xl bg-white dark:bg-slate-800 overflow-hidden shadow-inner">
                     <SignatureCanvas
                       ref={sigCanvas}
                       penColor={isDarkMode ? '#ffffff' : '#000000'}
@@ -2969,6 +3065,9 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
                       }}
                       onEnd={handleCanvasEnd}
                     />
+                    <span className="pointer-events-none select-none absolute bottom-2 right-3 text-[10px] text-gray-400 dark:text-slate-500 print:hidden pdf:hidden">
+                      Sign with mouse or finger • or use &apos;Type Name&apos;
+                    </span>
                   </div>
 
                   {/* Canvas Controls: Undo, Redo, Clear Signature */}
@@ -3787,6 +3886,82 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
               >
                 <Copy className="w-4 h-4" />
                 <span>Yes, Copy</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* =========================================================================
+          CONFIRM OVERWRITE TIME MODAL (TIME IN/OUT & LUNCH IN/OUT PROTECTION)
+          ========================================================================= */}
+      {overwriteTimeConfirm && records[overwriteTimeConfirm.dayIndex] && (
+        <div
+          className="fixed inset-0 bg-black/50 dark:bg-slate-950/80 backdrop-blur-sm flex items-center justify-center z-50 p-4"
+          onClick={() => setOverwriteTimeConfirm(null)}
+        >
+          <div
+            className="bg-white dark:bg-slate-900 rounded-3xl shadow-2xl max-w-sm w-full p-6 border border-gray-200 dark:border-slate-800"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="w-12 h-12 bg-amber-100 dark:bg-amber-950/60 rounded-2xl flex items-center justify-center text-amber-600 dark:text-amber-400 mb-4">
+              <AlertTriangle className="w-6 h-6" />
+            </div>
+            <h3 className="text-lg font-bold text-gray-900 dark:text-white">
+              Replace {overwriteTimeConfirm.label} Time?
+            </h3>
+            <p className="text-sm text-gray-600 dark:text-slate-300 mt-2">
+              <strong className="text-gray-900 dark:text-white">
+                {records[overwriteTimeConfirm.dayIndex].day}
+              </strong>{' '}
+              already has a recorded{' '}
+              <strong className="text-gray-900 dark:text-white">
+                {overwriteTimeConfirm.label}
+              </strong>{' '}
+              time. Are you sure you want to overwrite it with the current time?
+            </p>
+
+            <div className="mt-4 p-3 rounded-2xl bg-gray-50 dark:bg-slate-800/70 border border-gray-200 dark:border-slate-700 text-xs grid grid-cols-2 gap-3">
+              <div>
+                <div className="text-[11px] font-bold uppercase tracking-wider text-gray-500 dark:text-slate-400">
+                  Recorded Time
+                </div>
+                <div className="text-base font-black font-mono text-gray-900 dark:text-white mt-0.5">
+                  {overwriteTimeConfirm.existingValue}
+                </div>
+              </div>
+              <div>
+                <div className="text-[11px] font-bold uppercase tracking-wider text-amber-700 dark:text-amber-300">
+                  New Time (Now)
+                </div>
+                <div className="text-base font-black font-mono text-amber-600 dark:text-amber-400 mt-0.5">
+                  {overwriteTimeConfirm.proposedValue}
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-6 flex items-center justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setOverwriteTimeConfirm(null)}
+                className="min-h-[44px] px-4 py-2 text-sm font-bold text-gray-700 dark:text-slate-300 bg-gray-100 dark:bg-slate-800 rounded-xl"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  handleRecordChange(
+                    overwriteTimeConfirm.dayIndex,
+                    overwriteTimeConfirm.field,
+                    overwriteTimeConfirm.proposedValue
+                  );
+                  setOverwriteTimeConfirm(null);
+                }}
+                className="min-h-[44px] px-5 py-2 text-sm font-bold text-white bg-amber-600 hover:bg-amber-700 rounded-xl shadow-sm flex items-center gap-1.5"
+              >
+                <Check className="w-4 h-4" />
+                <span>Yes, Replace</span>
               </button>
             </div>
           </div>
