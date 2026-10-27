@@ -19,6 +19,8 @@ import {
   Download,
   FileText,
   HelpCircle,
+  Settings,
+  DollarSign,
 } from 'lucide-react';
 import SignatureCanvas from 'react-signature-canvas';
 import { AbsenceType, AppUser, Company, TimeRecord } from '../types/timeclock';
@@ -103,6 +105,25 @@ export default function MyHoursScreen({
   const [historyPointer, setHistoryPointer] = useState<number>(-1);
   const [isGeneratingPDF, setIsGeneratingPDF] = useState(false);
   const sigCanvas = useRef<SignatureCanvas>(null);
+
+  const signatureDateWarning = useMemo(() => {
+    if (!sigDate || !sigDate.includes('-')) return null;
+    const [y, m, d] = sigDate.split('-').map(Number);
+    if (!y || !m || !d) return null;
+    const selectedMidnight = new Date(y, m - 1, d);
+    const now = new Date();
+    const todayMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const diffDays = Math.round(
+      (selectedMidnight.getTime() - todayMidnight.getTime()) / (1000 * 60 * 60 * 24)
+    );
+    if (diffDays > 0) {
+      return `Signature Date is set to a future date (${diffDays === 1 ? '1 day ahead' : `${diffDays} days ahead`}).`;
+    }
+    if (diffDays < -7) {
+      return `Signature Date is more than 7 days in the past (${Math.abs(diffDays)} days ago).`;
+    }
+    return null;
+  }, [sigDate]);
 
   // Keyboard navigation refs for desktop table time cells
   const TIME_COLUMNS = ['timeIn', 'lunchStart', 'lunchEnd', 'timeOut'] as const;
@@ -294,6 +315,48 @@ export default function MyHoursScreen({
 
   const canEditOwnTime = Boolean(user.permissions.allowEditOwnTime);
   const showEmployeeApprove = company.approvalMode === 'Employee and Manager';
+  const isAllowedBusinessPayUser =
+    user.role === 'Admin' || user.role === 'Manager' || Boolean(user.permissions?.viewOwnPayRate);
+
+  const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [optionalHourlyWage, setOptionalHourlyWage] = useState<string>(() => {
+    try {
+      const saved = localStorage.getItem(`tsm_optional_hourly_wage_${user.id}`);
+      if (saved !== null) return saved;
+    } catch {}
+    return user.rateType === 'Hourly' && user.payRate > 0 ? String(user.payRate) : '';
+  });
+
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(`tsm_optional_hourly_wage_${user.id}`);
+      if (saved !== null) {
+        setOptionalHourlyWage(saved);
+      } else {
+        setOptionalHourlyWage(
+          user.rateType === 'Hourly' && user.payRate > 0 ? String(user.payRate) : ''
+        );
+      }
+    } catch {}
+  }, [user.id, user.payRate, user.rateType]);
+
+  const handleHourlyWageChange = (val: string) => {
+    setOptionalHourlyWage(val);
+    try {
+      localStorage.setItem(`tsm_optional_hourly_wage_${user.id}`, val);
+    } catch {}
+  };
+
+  const parsedHourlyWage = useMemo(() => {
+    if (!isAllowedBusinessPayUser) return 0;
+    const num = parseFloat(optionalHourlyWage);
+    return !isNaN(num) && num > 0 ? num : 0;
+  }, [isAllowedBusinessPayUser, optionalHourlyWage]);
+
+  const grossPayTotal = useMemo(() => {
+    if (!isAllowedBusinessPayUser || parsedHourlyWage <= 0) return 0;
+    return periodSummary.totalHours * parsedHourlyWage;
+  }, [isAllowedBusinessPayUser, parsedHourlyWage, periodSummary.totalHours]);
 
   const handleWorkFieldEdit = (
     dateStr: string,
@@ -630,6 +693,18 @@ export default function MyHoursScreen({
               <span>Exit to Timesheet</span>
             </button>
 
+            {isAllowedBusinessPayUser && (
+              <button
+                type="button"
+                onClick={() => setShowSettingsModal(true)}
+                title="Settings & Optional Hourly Wage"
+                className="min-h-[40px] px-3 py-2 text-xs font-semibold text-gray-700 dark:text-slate-200 bg-white dark:bg-slate-800 border border-gray-300 dark:border-slate-700 rounded-xl hover:bg-gray-50 flex items-center gap-1.5 whitespace-nowrap"
+              >
+                <Settings className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+                <span>Settings</span>
+              </button>
+            )}
+
             <button
               type="button"
               onClick={() => {
@@ -730,6 +805,17 @@ export default function MyHoursScreen({
                 <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-rose-100 dark:bg-rose-950/70 text-rose-700 dark:text-rose-300 border border-rose-300 dark:border-rose-800 text-[10px] font-extrabold uppercase">
                   <AlertTriangle className="w-3 h-3 text-rose-600 shrink-0" />
                   <span>+{formatHours(overtimeDisplayHours, company.timeTotalsFormat)} OT</span>
+                </span>
+              )}
+              {isAllowedBusinessPayUser && parsedHourlyWage > 0 && (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-100 dark:bg-emerald-950/70 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800 text-[10px] font-extrabold">
+                  <span>
+                    Gross: {company.currencySymbol}
+                    {grossPayTotal.toLocaleString('en-US', {
+                      minimumFractionDigits: 2,
+                      maximumFractionDigits: 2,
+                    })}
+                  </span>
                 </span>
               )}
             </div>
@@ -1216,16 +1302,43 @@ export default function MyHoursScreen({
                 </div>
               )}
 
-              <div className="pt-2 print:pt-1">
-                <label className="block text-xs font-bold uppercase tracking-wider text-gray-600 mb-1">
+              <div className="pt-2 print:pt-1 space-y-1.5">
+                <label className="block text-xs font-bold uppercase tracking-wider text-gray-600 dark:text-slate-400">
                   Signature Date
                 </label>
-                <input
-                  type="date"
-                  value={sigDate}
-                  onChange={e => setSigDate(e.target.value)}
-                  className="min-h-[42px] print:min-h-0 px-3 py-1.5 print:p-1 text-sm print:text-xs font-semibold bg-white border border-gray-300 rounded-xl"
-                />
+                <div className="flex flex-wrap items-center gap-2">
+                  <input
+                    type="date"
+                    value={sigDate}
+                    onChange={e => setSigDate(e.target.value)}
+                    aria-invalid={Boolean(signatureDateWarning)}
+                    aria-describedby={signatureDateWarning ? 'myhours-signature-date-warning' : undefined}
+                    className={`min-h-[42px] print:min-h-0 px-3 py-1.5 print:p-1 text-sm print:text-xs font-semibold bg-white dark:bg-slate-800 text-gray-900 dark:text-white border rounded-xl transition-colors ${
+                      signatureDateWarning
+                        ? 'border-amber-400 dark:border-amber-500 ring-1 ring-amber-400/40'
+                        : 'border-gray-300 dark:border-slate-700'
+                    }`}
+                  />
+                  {signatureDateWarning && (
+                    <button
+                      type="button"
+                      onClick={() => setSigDate(todayISO)}
+                      className="min-h-[34px] px-2.5 py-1 text-xs font-bold text-amber-800 dark:text-amber-200 bg-amber-100 dark:bg-amber-950/70 hover:bg-amber-200 dark:hover:bg-amber-900/70 border border-amber-300 dark:border-amber-700 rounded-lg transition-colors print:hidden"
+                    >
+                      Reset to Today
+                    </button>
+                  )}
+                </div>
+                {signatureDateWarning && (
+                  <div
+                    id="myhours-signature-date-warning"
+                    role="alert"
+                    className="flex items-start gap-1.5 p-2.5 rounded-xl bg-amber-50 dark:bg-amber-950/50 border border-amber-200 dark:border-amber-800/80 text-xs font-semibold text-amber-800 dark:text-amber-300 print:hidden"
+                  >
+                    <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+                    <span>{signatureDateWarning}</span>
+                  </div>
+                )}
               </div>
             </div>
 
@@ -1291,10 +1404,53 @@ export default function MyHoursScreen({
                 <span>Paid: {formatHours(periodSummary.paidHours, company.timeTotalsFormat)}</span>
               </div>
 
-              {user.permissions.viewOwnPayRate && (
-                <div className="text-xs print:text-[10px] font-semibold text-gray-700 dark:text-slate-300 pt-2 print:pt-1 border-t border-gray-100 dark:border-slate-700">
-                  Pay Rate: {company.currencySymbol}
-                  {user.payRate.toFixed(2)} ({user.rateType})
+              {isAllowedBusinessPayUser && (
+                <div className="pt-2.5 print:pt-1.5 border-t border-gray-100 dark:border-slate-700 space-y-2">
+                  {parsedHourlyWage > 0 ? (
+                    <div className="p-3.5 print:p-2 rounded-xl bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/70 flex items-center justify-between gap-3">
+                      <div>
+                        <div className="text-[11px] print:text-[9px] font-extrabold uppercase tracking-wider text-emerald-800 dark:text-emerald-300 flex items-center gap-1">
+                          <DollarSign className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                          <span>Gross Pay</span>
+                        </div>
+                        <div className="text-[11px] print:text-[9px] font-medium text-emerald-700/90 dark:text-emerald-300/80 mt-0.5">
+                          {formatHours(periodSummary.totalHours, company.timeTotalsFormat)} hrs ×{' '}
+                          {company.currencySymbol}
+                          {parsedHourlyWage.toFixed(2)}/hr
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <div className="text-xl sm:text-2xl print:text-base font-black font-mono tabular-nums text-emerald-700 dark:text-emerald-300">
+                          {company.currencySymbol}
+                          {grossPayTotal.toLocaleString('en-US', {
+                            minimumFractionDigits: 2,
+                            maximumFractionDigits: 2,
+                          })}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setShowSettingsModal(true)}
+                          className="text-[10px] font-bold text-indigo-600 dark:text-indigo-400 hover:underline print:hidden"
+                        >
+                          Edit wage in Settings
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex items-center justify-between gap-2 text-xs print:text-[10px] font-semibold text-gray-700 dark:text-slate-300">
+                      <span>
+                        Account Rate: {company.currencySymbol}
+                        {user.payRate.toFixed(2)} ({user.rateType})
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setShowSettingsModal(true)}
+                        className="text-xs font-bold text-indigo-600 dark:text-indigo-400 hover:underline print:hidden"
+                      >
+                        + Set Hourly Wage in Settings
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -1306,6 +1462,117 @@ export default function MyHoursScreen({
           </div>
         </div>
       </div>
+
+      {/* Settings Modal (Optional Hourly Wage for Allowed Business Account Users) */}
+      {showSettingsModal && isAllowedBusinessPayUser && (
+        <div
+          className="fixed inset-0 bg-black/50 backdrop-blur-xs flex items-center justify-center z-50 p-4"
+          onClick={() => setShowSettingsModal(false)}
+        >
+          <div
+            className="bg-white dark:bg-slate-900 rounded-2xl max-w-md w-full p-6 border border-gray-200 dark:border-slate-800 shadow-2xl space-y-4"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-emerald-100 dark:bg-emerald-950/80 text-emerald-600 dark:text-emerald-400 flex items-center justify-center">
+                  <DollarSign className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-gray-900 dark:text-white">
+                    Compensation &amp; Wage Settings
+                  </h3>
+                  <p className="text-xs text-gray-500 dark:text-slate-400">
+                    Authorized for {user.fullName} ({company.name})
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowSettingsModal(false)}
+                className="text-gray-400 hover:text-gray-600 dark:hover:text-slate-200"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-4 rounded-xl bg-gray-50 dark:bg-slate-800/60 border border-gray-200 dark:border-slate-700 space-y-3">
+              <div>
+                <label className="block text-xs font-bold uppercase tracking-wider text-gray-700 dark:text-slate-200 mb-1">
+                  Hourly Wage ({company.currencySymbol}/hr) — Optional
+                </label>
+                <p className="text-xs text-gray-500 dark:text-slate-400 mb-2">
+                  Enter an hourly wage to calculate Gross Pay based on Total Period Hours in the summary section.
+                </p>
+                <div className="relative">
+                  <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-sm font-bold text-gray-500 dark:text-slate-400">
+                    {company.currencySymbol}
+                  </span>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={optionalHourlyWage}
+                    onChange={e => handleHourlyWageChange(e.target.value)}
+                    placeholder="e.g. 24.00 (optional)"
+                    className="w-full min-h-[44px] pl-8 pr-16 py-2 text-sm font-bold font-mono border border-gray-300 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-900 text-gray-900 dark:text-white focus:ring-2 focus:ring-indigo-500"
+                  />
+                  <span className="absolute right-3.5 top-1/2 -translate-y-1/2 text-xs font-semibold text-gray-400">
+                    / hr
+                  </span>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+                {user.rateType === 'Hourly' && user.payRate > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => handleHourlyWageChange(String(user.payRate))}
+                    className="text-xs font-bold text-indigo-600 dark:text-indigo-400 hover:underline"
+                  >
+                    Use Account Rate ({company.currencySymbol}
+                    {user.payRate.toFixed(2)}/hr)
+                  </button>
+                )}
+                {optionalHourlyWage && (
+                  <button
+                    type="button"
+                    onClick={() => handleHourlyWageChange('')}
+                    className="text-xs font-semibold text-rose-600 dark:text-rose-400 hover:underline ml-auto"
+                  >
+                    Clear hourly wage
+                  </button>
+                )}
+              </div>
+
+              {parsedHourlyWage > 0 && (
+                <div className="p-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800/70 flex items-center justify-between text-xs">
+                  <span className="font-semibold text-emerald-800 dark:text-emerald-300">
+                    Gross Pay Preview ({formatHours(periodSummary.totalHours, company.timeTotalsFormat)} hrs):
+                  </span>
+                  <span className="font-black font-mono text-sm text-emerald-700 dark:text-emerald-300">
+                    {company.currencySymbol}
+                    {grossPayTotal.toLocaleString('en-US', {
+                      minimumFractionDigits: 2,
+                      maximumFractionDigits: 2,
+                    })}
+                  </span>
+                </div>
+              )}
+            </div>
+
+            <div className="flex justify-end pt-1">
+              <button
+                type="button"
+                onClick={() => setShowSettingsModal(false)}
+                className="min-h-[40px] px-5 py-2 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl"
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Add Entry Request Modal */}
       {showEntryRequestModal && (

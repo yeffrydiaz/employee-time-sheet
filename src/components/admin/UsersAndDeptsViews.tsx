@@ -60,7 +60,7 @@ const PERMISSION_LABELS: Array<{ key: keyof UserPermissions; label: string }> = 
   { key: 'allowComments', label: 'Allow comments on records' },
   { key: 'allowApproveRecords', label: 'Allow approve time records (Manager use)' },
   { key: 'allowViewReports', label: 'Allow view reports' },
-  { key: 'viewOwnPayRate', label: 'View own pay rate' },
+  { key: 'viewOwnPayRate', label: 'View own pay rate & gross pay calculation' },
   { key: 'allowAddEntryRequest', label: 'Allow add entry request' },
   { key: 'allowAddAbsenceRequest', label: 'Allow add absence request' },
   { key: 'allowSeeWhoIsIn', label: 'Allow see Who Is In (Dashboard board)' },

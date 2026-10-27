@@ -33,7 +33,8 @@ import {
   Wrench,
   FileText,
   Bell,
-  HelpCircle
+  HelpCircle,
+  DollarSign
 } from 'lucide-react';
 import SignatureCanvas from 'react-signature-canvas';
 import { motion, AnimatePresence } from 'motion/react';
@@ -240,9 +241,62 @@ const renderTypedSignatureImage = (typedName: string, isDark: boolean): string =
   return canvas.toDataURL('image/png');
 };
 
-function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => void }) {
+function LandingTimesheet({
+  onOpenBusinessLogin,
+  businessSession,
+  onNavigate,
+}: {
+  onOpenBusinessLogin: () => void;
+  businessSession: { user: AppUser; company: Company } | null;
+  onNavigate: (path: string) => void;
+}) {
   const initialCompany = getInitialCompany();
   const savedData = loadSavedData(initialCompany);
+
+  const isAllowedBusinessPayUser = Boolean(
+    businessSession?.user &&
+      (businessSession.user.role === 'Admin' ||
+        businessSession.user.role === 'Manager' ||
+        businessSession.user.permissions?.viewOwnPayRate)
+  );
+  const currencySymbol = businessSession?.company?.currencySymbol || '$';
+
+  const [optionalHourlyWage, setOptionalHourlyWage] = useState<string>(() => {
+    const bUser = businessSession?.user;
+    if (!bUser) return '';
+    try {
+      const saved = localStorage.getItem(`tsm_optional_hourly_wage_${bUser.id}`);
+      if (saved !== null) return saved;
+    } catch {}
+    return bUser.rateType === 'Hourly' && bUser.payRate > 0 ? String(bUser.payRate) : '';
+  });
+
+  useEffect(() => {
+    const bUser = businessSession?.user;
+    if (!bUser) {
+      setOptionalHourlyWage('');
+      return;
+    }
+    try {
+      const saved = localStorage.getItem(`tsm_optional_hourly_wage_${bUser.id}`);
+      if (saved !== null) {
+        setOptionalHourlyWage(saved);
+      } else {
+        setOptionalHourlyWage(
+          bUser.rateType === 'Hourly' && bUser.payRate > 0 ? String(bUser.payRate) : ''
+        );
+      }
+    } catch {}
+  }, [businessSession?.user?.id, businessSession?.user?.payRate, businessSession?.user?.rateType]);
+
+  const handleHourlyWageChange = (val: string) => {
+    setOptionalHourlyWage(val);
+    if (businessSession?.user) {
+      try {
+        localStorage.setItem(`tsm_optional_hourly_wage_${businessSession.user.id}`, val);
+      } catch {}
+    }
+  };
 
   // ReCaptcha site key setup
   useEffect(() => {
@@ -1384,6 +1438,25 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
     return records.filter(r => r.timeIn || r.timeOut || (r.totalHours && parseFloat(r.totalHours) > 0)).length;
   }, [records]);
 
+  const signatureDateWarning = useMemo(() => {
+    if (!date || !date.includes('-')) return null;
+    const [y, m, d] = date.split('-').map(Number);
+    if (!y || !m || !d) return null;
+    const selectedMidnight = new Date(y, m - 1, d);
+    const now = new Date();
+    const todayMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const diffDays = Math.round(
+      (selectedMidnight.getTime() - todayMidnight.getTime()) / (1000 * 60 * 60 * 24)
+    );
+    if (diffDays > 0) {
+      return `Signature Date is set to a future date (${diffDays === 1 ? '1 day ahead' : `${diffDays} days ahead`}).`;
+    }
+    if (diffDays < -7) {
+      return `Signature Date is more than 7 days in the past (${Math.abs(diffDays)} days ago).`;
+    }
+    return null;
+  }, [date]);
+
   // Calculate overtime (Phase 1 rule: >40h per 7-day workweek) & 40-hour weekly target progress
   const numericTotalHours = useMemo(() => parseFloat(totalHours || '0') || 0, [totalHours]);
 
@@ -1411,6 +1484,17 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
   }, [records]);
 
   const isOvertimePeriod = overtimePeriodHours > 0;
+
+  const parsedHourlyWage = useMemo(() => {
+    if (!isAllowedBusinessPayUser) return 0;
+    const num = parseFloat(optionalHourlyWage);
+    return !isNaN(num) && num > 0 ? num : 0;
+  }, [isAllowedBusinessPayUser, optionalHourlyWage]);
+
+  const grossPayTotal = useMemo(() => {
+    if (!isAllowedBusinessPayUser || parsedHourlyWage <= 0) return 0;
+    return numericTotalHours * parsedHourlyWage;
+  }, [isAllowedBusinessPayUser, parsedHourlyWage, numericTotalHours]);
 
   // 40-hour weekly target metrics
   const weeklyTargetHours = 40;
@@ -2102,6 +2186,20 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
                   >
                     <AlertTriangle className="w-3 h-3 text-rose-600 dark:text-rose-400 shrink-0" />
                     <span>+{overtimePeriodHours.toFixed(2)} OT</span>
+                  </span>
+                )}
+                {isAllowedBusinessPayUser && parsedHourlyWage > 0 && (
+                  <span
+                    className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-md bg-emerald-100 dark:bg-emerald-950/70 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800 text-[10px] font-extrabold tracking-tight"
+                    title={`Gross Pay based on ${(totalHours || '0.00')} hrs × ${currencySymbol}${parsedHourlyWage.toFixed(2)}/hr`}
+                  >
+                    <span>
+                      Gross: {currencySymbol}
+                      {grossPayTotal.toLocaleString('en-US', {
+                        minimumFractionDigits: 2,
+                        maximumFractionDigits: 2,
+                      })}
+                    </span>
                   </span>
                 )}
                 <span className="mx-1 opacity-40">•</span>
@@ -3128,16 +3226,43 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
               )}
 
               {/* Signature Date */}
-              <div className="pt-2 print:pt-1">
-                <label className="block text-xs font-bold uppercase tracking-wider text-gray-600 dark:text-slate-400 mb-1">
+              <div className="pt-2 print:pt-1 space-y-1.5">
+                <label className="block text-xs font-bold uppercase tracking-wider text-gray-600 dark:text-slate-400">
                   Signature Date
                 </label>
-                <input
-                  type="date"
-                  value={date}
-                  onChange={e => setDate(e.target.value)}
-                  className="min-h-[44px] print:min-h-0 px-3 py-1.5 print:p-1 text-base print:text-xs font-semibold text-gray-900 dark:text-white bg-white dark:bg-slate-800 border border-gray-300 dark:border-slate-700 rounded-xl focus:ring-2 focus:ring-indigo-500"
-                />
+                <div className="flex flex-wrap items-center gap-2">
+                  <input
+                    type="date"
+                    value={date}
+                    onChange={e => setDate(e.target.value)}
+                    aria-invalid={Boolean(signatureDateWarning)}
+                    aria-describedby={signatureDateWarning ? 'signature-date-warning' : undefined}
+                    className={`min-h-[44px] print:min-h-0 px-3 py-1.5 print:p-1 text-base print:text-xs font-semibold text-gray-900 dark:text-white bg-white dark:bg-slate-800 border rounded-xl focus:ring-2 focus:ring-indigo-500 transition-colors ${
+                      signatureDateWarning
+                        ? 'border-amber-400 dark:border-amber-500 ring-1 ring-amber-400/40'
+                        : 'border-gray-300 dark:border-slate-700'
+                    }`}
+                  />
+                  {signatureDateWarning && (
+                    <button
+                      type="button"
+                      onClick={() => setDate(getTodayDate())}
+                      className="min-h-[36px] px-2.5 py-1 text-xs font-bold text-amber-800 dark:text-amber-200 bg-amber-100 dark:bg-amber-950/70 hover:bg-amber-200 dark:hover:bg-amber-900/70 border border-amber-300 dark:border-amber-700 rounded-lg transition-colors print:hidden pdf:hidden"
+                    >
+                      Reset to Today
+                    </button>
+                  )}
+                </div>
+                {signatureDateWarning && (
+                  <div
+                    id="signature-date-warning"
+                    role="alert"
+                    className="flex items-start gap-1.5 p-2.5 rounded-xl bg-amber-50 dark:bg-amber-950/50 border border-amber-200 dark:border-amber-800/80 text-xs font-semibold text-amber-800 dark:text-amber-300 print:hidden pdf:hidden"
+                  >
+                    <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+                    <span>{signatureDateWarning}</span>
+                  </div>
+                )}
               </div>
             </div>
 
@@ -3259,6 +3384,38 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
                   </div>
                 </div>
               </div>
+
+              {/* Gross Pay Display in Summary Section (Only for Allowed Business Account Users) */}
+              {isAllowedBusinessPayUser && parsedHourlyWage > 0 && (
+                <div className="p-3.5 print:p-2 rounded-xl bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/70 flex items-center justify-between gap-3">
+                  <div>
+                    <div className="text-[11px] print:text-[9px] font-extrabold uppercase tracking-wider text-emerald-800 dark:text-emerald-300 flex items-center gap-1">
+                      <DollarSign className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                      <span>Gross Pay</span>
+                    </div>
+                    <div className="text-[11px] print:text-[9px] font-medium text-emerald-700/90 dark:text-emerald-300/80 mt-0.5">
+                      {totalHours || '0.00'} hrs × {currencySymbol}
+                      {parsedHourlyWage.toFixed(2)}/hr
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <div className="text-xl sm:text-2xl print:text-base font-black font-mono tabular-nums text-emerald-700 dark:text-emerald-300">
+                      {currencySymbol}
+                      {grossPayTotal.toLocaleString('en-US', {
+                        minimumFractionDigits: 2,
+                        maximumFractionDigits: 2,
+                      })}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setIsSettingsOpen(true)}
+                      className="text-[10px] font-bold text-indigo-600 dark:text-indigo-400 hover:underline print:hidden pdf:hidden"
+                    >
+                      Edit wage in Settings
+                    </button>
+                  </div>
+                </div>
+              )}
 
               <p className="text-xs print:text-[10px] text-gray-500 dark:text-slate-400 leading-relaxed print:leading-snug break-words whitespace-normal max-w-full">
                 Total hours are automatically calculated based on
@@ -3414,35 +3571,162 @@ function LandingTimesheet({ onOpenBusinessLogin }: { onOpenBusinessLogin: () => 
                           Business Account &amp; Portal
                         </h4>
                         <span className="text-[10px] font-extrabold uppercase tracking-wider px-2 py-0.5 rounded-md bg-indigo-100 dark:bg-indigo-900/70 text-indigo-700 dark:text-indigo-300 border border-indigo-200/80 dark:border-indigo-700/60">
-                          Workspace Access
+                          {businessSession?.user ? `${businessSession.user.role} Active` : 'Workspace Access'}
                         </span>
                       </div>
                       <p className="text-xs text-gray-600 dark:text-slate-300 mt-1.5 leading-relaxed">
-                        Login adds sync + history. Sheet works without it. Sign in to access the Admin Console, Web Punch Clock, and My Hours.
+                        {businessSession?.user ? (
+                          <>
+                            Signed in as <strong>{businessSession.user.fullName}</strong> ({businessSession.company.name}). Access your Business Portal or manage timesheet settings below.
+                          </>
+                        ) : (
+                          'Login adds sync + history. Sheet works without it. Sign in to access the Admin Console, Web Punch Clock, and My Hours.'
+                        )}
                       </p>
                     </div>
                   </div>
                 </div>
-                <div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setIsSettingsOpen(false);
-                      onOpenBusinessLogin();
-                    }}
-                    className="w-full min-h-[46px] px-4 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs sm:text-sm font-bold shadow-sm flex items-center justify-between transition-all active:scale-[0.99]"
-                  >
-                    <span className="flex items-center gap-2.5">
-                      <LogIn className="w-4 h-4" />
-                      <span>Business Login</span>
-                    </span>
-                    <span className="inline-flex items-center gap-1 text-xs font-semibold text-indigo-100">
-                      <span>Open Portal</span>
-                      <ChevronRight className="w-4 h-4" />
-                    </span>
-                  </button>
+                <div className="flex flex-wrap gap-2">
+                  {businessSession?.user ? (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsSettingsOpen(false);
+                          onNavigate(
+                            businessSession.user.role === 'Admin' || businessSession.user.role === 'Manager'
+                              ? '/admin'
+                              : '/my-hours'
+                          );
+                        }}
+                        className="flex-1 min-h-[46px] px-4 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs sm:text-sm font-bold shadow-sm flex items-center justify-between transition-all active:scale-[0.99]"
+                      >
+                        <span className="flex items-center gap-2.5">
+                          <LogIn className="w-4 h-4" />
+                          <span>
+                            {businessSession.user.role === 'Admin' || businessSession.user.role === 'Manager'
+                              ? 'Open Admin Console'
+                              : 'Open My Hours Portal'}
+                          </span>
+                        </span>
+                        <ChevronRight className="w-4 h-4" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsSettingsOpen(false);
+                          onOpenBusinessLogin();
+                        }}
+                        className="min-h-[46px] px-3.5 py-3 bg-white dark:bg-slate-800 hover:bg-gray-50 text-gray-700 dark:text-slate-200 border border-gray-200 dark:border-slate-700 rounded-xl text-xs font-bold transition-all"
+                      >
+                        Switch Account
+                      </button>
+                    </>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsSettingsOpen(false);
+                        onOpenBusinessLogin();
+                      }}
+                      className="w-full min-h-[46px] px-4 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs sm:text-sm font-bold shadow-sm flex items-center justify-between transition-all active:scale-[0.99]"
+                    >
+                      <span className="flex items-center gap-2.5">
+                        <LogIn className="w-4 h-4" />
+                        <span>Business Login</span>
+                      </span>
+                      <span className="inline-flex items-center gap-1 text-xs font-semibold text-indigo-100">
+                        <span>Open Portal</span>
+                        <ChevronRight className="w-4 h-4" />
+                      </span>
+                    </button>
+                  )}
                 </div>
               </section>
+
+              {/* Optional Hourly Wage Section — Strictly Only for Allowed Business Account Users */}
+              {isAllowedBusinessPayUser && businessSession?.user && (
+                <section
+                  aria-label="Hourly Wage and Gross Pay"
+                  className="p-5 rounded-2xl bg-gray-50/90 dark:bg-slate-800/50 border border-gray-200/90 dark:border-slate-800 space-y-3.5"
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-8 h-8 rounded-xl bg-emerald-100/80 dark:bg-emerald-950/80 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0">
+                        <DollarSign className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <h4 className="text-xs font-bold uppercase tracking-wider text-gray-700 dark:text-slate-200">
+                          Hourly Wage (Optional)
+                        </h4>
+                        <p className="text-xs text-gray-500 dark:text-slate-400 mt-0.5">
+                          Calculate Gross Pay from Total Hours in the summary section
+                        </p>
+                      </div>
+                    </div>
+                    <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-md bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
+                      Business Authorized
+                    </span>
+                  </div>
+
+                  <div className="relative">
+                    <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-sm font-bold text-gray-500 dark:text-slate-400">
+                      {currencySymbol}
+                    </span>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={optionalHourlyWage}
+                      onChange={e => handleHourlyWageChange(e.target.value)}
+                      placeholder="e.g. 24.00 (optional)"
+                      aria-label="Hourly Wage (Optional)"
+                      className="w-full min-h-[46px] pl-8 pr-16 py-2.5 text-sm font-bold font-mono border border-gray-300 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-900 text-gray-900 dark:text-white focus:ring-2 focus:ring-indigo-500"
+                    />
+                    <span className="absolute right-3.5 top-1/2 -translate-y-1/2 text-xs font-semibold text-gray-400">
+                      / hr
+                    </span>
+                  </div>
+
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    {businessSession.user.rateType === 'Hourly' && businessSession.user.payRate > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => handleHourlyWageChange(String(businessSession.user.payRate))}
+                        className="text-xs font-bold text-indigo-600 dark:text-indigo-400 hover:underline"
+                      >
+                        Use Account Rate ({currencySymbol}
+                        {businessSession.user.payRate.toFixed(2)}/hr)
+                      </button>
+                    )}
+                    {optionalHourlyWage && (
+                      <button
+                        type="button"
+                        onClick={() => handleHourlyWageChange('')}
+                        className="text-xs font-semibold text-rose-600 dark:text-rose-400 hover:underline ml-auto"
+                      >
+                        Clear hourly wage
+                      </button>
+                    )}
+                  </div>
+
+                  {parsedHourlyWage > 0 && (
+                    <div className="p-3 rounded-xl bg-emerald-50/80 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800/70 flex items-center justify-between text-xs">
+                      <span className="font-semibold text-emerald-800 dark:text-emerald-300">
+                        Gross Pay ({totalHours || '0.00'} hrs × {currencySymbol}
+                        {parsedHourlyWage.toFixed(2)}/hr):
+                      </span>
+                      <span className="font-black font-mono text-sm text-emerald-700 dark:text-emerald-300">
+                        {currencySymbol}
+                        {grossPayTotal.toLocaleString('en-US', {
+                          minimumFractionDigits: 2,
+                          maximumFractionDigits: 2,
+                        })}
+                      </span>
+                    </div>
+                  )}
+                </section>
+              )}
 
               {/* Appearance Section - Icon-prefixed Header & Generous Toggle Spacing */}
               <section
@@ -4485,6 +4769,12 @@ export default function App() {
     );
   }
 
-  return <LandingTimesheet onOpenBusinessLogin={() => navigate('/auth')} />;
+  return (
+    <LandingTimesheet
+      onOpenBusinessLogin={() => navigate('/auth')}
+      businessSession={currentSession}
+      onNavigate={navigate}
+    />
+  );
 }
 
