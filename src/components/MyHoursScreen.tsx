@@ -18,6 +18,7 @@ import {
   AlertTriangle,
   Download,
   FileText,
+  HelpCircle,
 } from 'lucide-react';
 import SignatureCanvas from 'react-signature-canvas';
 import { AbsenceType, AppUser, Company, TimeRecord } from '../types/timeclock';
@@ -102,6 +103,98 @@ export default function MyHoursScreen({
   const [historyPointer, setHistoryPointer] = useState<number>(-1);
   const [isGeneratingPDF, setIsGeneratingPDF] = useState(false);
   const sigCanvas = useRef<SignatureCanvas>(null);
+
+  // Keyboard navigation refs for desktop table time cells
+  const TIME_COLUMNS = ['timeIn', 'lunchStart', 'lunchEnd', 'timeOut'] as const;
+  type TimeColumnKey = (typeof TIME_COLUMNS)[number];
+  const timeCellRefs = useRef<Record<string, HTMLInputElement | null>>({});
+
+  const handleTimeCellKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLInputElement>, rowIndex: number, colKey: TimeColumnKey, totalRows: number) => {
+      const colIndex = TIME_COLUMNS.indexOf(colKey);
+      if (colIndex === -1) return;
+
+      let targetRow = rowIndex;
+      let targetCol = colIndex;
+
+      if (e.key === 'ArrowUp') {
+        targetRow = rowIndex - 1;
+      } else if (e.key === 'ArrowDown') {
+        targetRow = rowIndex + 1;
+      } else if (e.key === 'ArrowLeft' && (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey || !e.currentTarget.value)) {
+        targetCol = colIndex - 1;
+        if (targetCol < 0 && rowIndex > 0) {
+          targetRow = rowIndex - 1;
+          targetCol = TIME_COLUMNS.length - 1;
+        }
+      } else if (e.key === 'ArrowRight' && (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey || !e.currentTarget.value)) {
+        targetCol = colIndex + 1;
+        if (targetCol >= TIME_COLUMNS.length && rowIndex < totalRows - 1) {
+          targetRow = rowIndex + 1;
+          targetCol = 0;
+        }
+      } else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+        targetCol = e.key === 'ArrowLeft' ? colIndex - 1 : colIndex + 1;
+        if (targetCol < 0 && rowIndex > 0) {
+          targetRow = rowIndex - 1;
+          targetCol = TIME_COLUMNS.length - 1;
+        } else if (targetCol >= TIME_COLUMNS.length && rowIndex < totalRows - 1) {
+          targetRow = rowIndex + 1;
+          targetCol = 0;
+        }
+      } else {
+        return;
+      }
+
+      if (targetRow < 0 || targetRow >= totalRows || targetCol < 0 || targetCol >= TIME_COLUMNS.length) {
+        return;
+      }
+
+      const nextKey = `${targetRow}-${TIME_COLUMNS[targetCol]}`;
+      const nextInput = timeCellRefs.current[nextKey];
+      if (nextInput && !nextInput.disabled) {
+        e.preventDefault();
+        nextInput.focus();
+        try {
+          nextInput.select?.();
+        } catch {
+          // ignore select error on time inputs
+        }
+      }
+    },
+    []
+  );
+
+  const getWorkDayValidationWarning = useCallback((rec?: TimeRecord): string | null => {
+    if (!rec) return null;
+    const toMins = (t?: string) => {
+      if (!t || !t.includes(':')) return null;
+      const [h, m] = t.split(':').map(Number);
+      if (isNaN(h) || isNaN(m)) return null;
+      return h * 60 + m;
+    };
+    const inM = toMins(rec.timeIn);
+    const outM = toMins(rec.timeOut);
+    const lsM = toMins(rec.lunchStart);
+    const leM = toMins(rec.lunchEnd);
+
+    if (inM !== null && outM !== null && outM <= inM) {
+      return 'Time Out must be later than Time In';
+    }
+    if ((lsM !== null && leM === null) || (lsM === null && leM !== null)) {
+      return 'Enter both Lunch Start and Lunch End';
+    }
+    if (lsM !== null && leM !== null) {
+      if (leM <= lsM) {
+        return 'Lunch End must be later than Lunch Start';
+      }
+      const gap = leM - lsM;
+      if (gap < 30) {
+        return `Lunch break is ${gap} min — standard break policy requires at least 30 minutes`;
+      }
+    }
+    return null;
+  }, []);
 
   const numDays = company.payPeriodType === 'Weekly' ? 7 : 14;
 
@@ -814,6 +907,9 @@ export default function MyHoursScreen({
                       {/* TIME IN: STRICT PURE WHITE */}
                       <td className="px-2.5 lg:px-3 py-2 align-middle bg-white dark:bg-slate-900">
                         <input
+                          ref={el => {
+                            timeCellRefs.current[`${rowIdx}-timeIn`] = el;
+                          }}
                           type="time"
                           value={workRec?.timeIn || ''}
                           disabled={!rowEditable}
@@ -823,7 +919,10 @@ export default function MyHoursScreen({
                               ? 'Fully approved records are locked — unapprove to edit.'
                               : !canEditOwnTime
                               ? 'Read-only: You do not have permission to edit your time.'
-                              : undefined
+                              : 'Use arrow keys to navigate between cells'
+                          }
+                          onKeyDownCapture={e =>
+                            handleTimeCellKeyDown(e, rowIdx, 'timeIn', periodDates.length)
                           }
                           onChange={e =>
                             handleWorkFieldEdit(dStr, workRec, 'timeIn', e.target.value)
@@ -835,10 +934,17 @@ export default function MyHoursScreen({
                       {/* LUNCH START: STRICT LIGHT YELLOW #FEF9C3 ONLY */}
                       <td className="px-2 lg:px-2.5 py-2 align-middle bg-[#FEF9C3] dark:bg-amber-950/40">
                         <input
+                          ref={el => {
+                            timeCellRefs.current[`${rowIdx}-lunchStart`] = el;
+                          }}
                           type="time"
                           value={workRec?.lunchStart || ''}
                           disabled={!rowEditable}
                           readOnly={!rowEditable}
+                          title="Use arrow keys to navigate between cells"
+                          onKeyDownCapture={e =>
+                            handleTimeCellKeyDown(e, rowIdx, 'lunchStart', periodDates.length)
+                          }
                           onChange={e =>
                             handleWorkFieldEdit(dStr, workRec, 'lunchStart', e.target.value)
                           }
@@ -849,10 +955,17 @@ export default function MyHoursScreen({
                       {/* LUNCH END: STRICT LIGHT YELLOW #FEF9C3 ONLY */}
                       <td className="px-2 lg:px-2.5 py-2 align-middle bg-[#FEF9C3] dark:bg-amber-950/40">
                         <input
+                          ref={el => {
+                            timeCellRefs.current[`${rowIdx}-lunchEnd`] = el;
+                          }}
                           type="time"
                           value={workRec?.lunchEnd || ''}
                           disabled={!rowEditable}
                           readOnly={!rowEditable}
+                          title="Use arrow keys to navigate between cells"
+                          onKeyDownCapture={e =>
+                            handleTimeCellKeyDown(e, rowIdx, 'lunchEnd', periodDates.length)
+                          }
                           onChange={e =>
                             handleWorkFieldEdit(dStr, workRec, 'lunchEnd', e.target.value)
                           }
@@ -863,10 +976,17 @@ export default function MyHoursScreen({
                       {/* TIME OUT: STRICT PURE WHITE */}
                       <td className="px-2.5 lg:px-3 py-2 align-middle bg-white dark:bg-slate-900">
                         <input
+                          ref={el => {
+                            timeCellRefs.current[`${rowIdx}-timeOut`] = el;
+                          }}
                           type="time"
                           value={workRec?.timeOut || ''}
                           disabled={!rowEditable}
                           readOnly={!rowEditable}
+                          title="Use arrow keys to navigate between cells"
+                          onKeyDownCapture={e =>
+                            handleTimeCellKeyDown(e, rowIdx, 'timeOut', periodDates.length)
+                          }
                           onChange={e =>
                             handleWorkFieldEdit(dStr, workRec, 'timeOut', e.target.value)
                           }
@@ -876,11 +996,27 @@ export default function MyHoursScreen({
 
                       {/* TOTAL HRS: WHITE BACKGROUND */}
                       <td className="px-2 py-2 align-middle text-center bg-white dark:bg-slate-900">
-                        <span className="text-xl lg:text-2xl font-black font-mono tabular-nums text-gray-900 dark:text-white">
-                          {workRec?.workingNow
-                            ? '—'
-                            : formatHours(totalDayHours, company.timeTotalsFormat)}
-                        </span>
+                        {(() => {
+                          const dayWarn = getWorkDayValidationWarning(workRec);
+                          return (
+                            <div className="flex flex-col items-center justify-center gap-0.5">
+                              <span className="text-xl lg:text-2xl font-black font-mono tabular-nums text-gray-900 dark:text-white">
+                                {workRec?.workingNow
+                                  ? '—'
+                                  : formatHours(totalDayHours, company.timeTotalsFormat)}
+                              </span>
+                              {dayWarn && (
+                                <span
+                                  title={dayWarn}
+                                  className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-950/70 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-800 text-[10px] font-bold leading-tight print:hidden"
+                                >
+                                  <AlertTriangle className="w-2.5 h-2.5 text-amber-600 shrink-0" />
+                                  <span>{dayWarn.includes('30 minutes') ? '< 30m break policy' : 'Check time'}</span>
+                                </span>
+                              )}
+                            </div>
+                          );
+                        })()}
                       </td>
 
                       {/* NOTES & ABSENCES / ADJUSTMENTS */}
@@ -962,9 +1098,32 @@ export default function MyHoursScreen({
           <div className="grid grid-cols-1 md:grid-cols-2 print:grid-cols-2 gap-6 print:gap-4 pt-4 print:pt-2.5 border-t border-gray-200/80 dark:border-slate-800 items-start print:break-inside-avoid">
             <div className="space-y-3 print:space-y-1.5 min-w-0">
               <div className="flex items-center justify-between">
-                <label className="block text-xs font-bold uppercase tracking-wider text-gray-600 dark:text-slate-400">
-                  Employee Signature
-                </label>
+                <div className="flex items-center gap-1.5">
+                  <label className="block text-xs font-bold uppercase tracking-wider text-gray-600 dark:text-slate-400">
+                    Employee Signature
+                  </label>
+                  <div className="relative group/sig-help inline-flex items-center print:hidden">
+                    <button
+                      type="button"
+                      aria-label="Draw signature help"
+                      aria-describedby="myhours-signature-help-tooltip"
+                      className="text-gray-400 hover:text-indigo-600 dark:text-slate-500 dark:hover:text-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/40 rounded-full p-0.5 transition-colors"
+                    >
+                      <HelpCircle className="w-3.5 h-3.5" />
+                    </button>
+                    <div
+                      id="myhours-signature-help-tooltip"
+                      role="tooltip"
+                      className="pointer-events-none invisible opacity-0 group-hover/sig-help:visible group-hover/sig-help:opacity-100 group-focus-within/sig-help:visible group-focus-within/sig-help:opacity-100 transition-all duration-150 absolute bottom-full left-0 mb-2 w-64 p-2.5 bg-slate-900 dark:bg-slate-800 text-white text-[11px] leading-relaxed rounded-xl shadow-xl border border-slate-700/80 z-30"
+                    >
+                      <p className="font-semibold text-indigo-300 mb-0.5">Draw Signature Help</p>
+                      <p className="text-slate-200">
+                        Use your <span className="font-semibold text-white">mouse or finger</span> to sign inside the canvas, or switch to <span className="font-semibold text-white">&apos;Type Name&apos;</span> mode if preferred.
+                      </p>
+                      <div className="absolute top-full left-2 -mt-1 border-4 border-transparent border-t-slate-900 dark:border-t-slate-800" />
+                    </div>
+                  </div>
+                </div>
                 <div className="flex items-center gap-1 bg-gray-100 dark:bg-slate-800 p-1 rounded-xl print:hidden">
                   <button
                     type="button"
@@ -995,7 +1154,7 @@ export default function MyHoursScreen({
 
               {signatureMode === 'draw' ? (
                 <div>
-                  <div className="border border-gray-300 dark:border-slate-700 rounded-2xl bg-white dark:bg-slate-800 overflow-hidden shadow-inner">
+                  <div className="relative border border-gray-300 dark:border-slate-700 rounded-2xl bg-white dark:bg-slate-800 overflow-hidden shadow-inner">
                     <SignatureCanvas
                       ref={sigCanvas}
                       penColor="#000000"
@@ -1005,6 +1164,9 @@ export default function MyHoursScreen({
                       }}
                       onEnd={handleCanvasEnd}
                     />
+                    <span className="pointer-events-none select-none absolute bottom-2 right-3 text-[10px] text-gray-400 dark:text-slate-500 print:hidden">
+                      Sign with mouse or finger • or use &apos;Type Name&apos;
+                    </span>
                   </div>
                   <div className="flex items-center justify-between mt-2 print:hidden">
                     <div className="flex items-center gap-1.5">
