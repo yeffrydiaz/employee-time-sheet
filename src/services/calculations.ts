@@ -125,27 +125,21 @@ export function computeWorkRecordSnapshot(
     }
   } else {
     // H3(b): Auto Lunch Deduction (never deduct twice)
-    let applyAuto = false;
-    let deductMins = company.autoLunchMinutes || 0;
+    // Automatically deduct 30 minutes of unpaid lunch break if the user worked more than 6 consecutive hours without logging a lunch break
+    let applyAuto = true;
+    let deductMins = company.autoLunchMinutes || 30;
     let thresholdHours = company.autoLunchAfterHours || 6;
 
     if (user && user.autoLunchMode === 'No') {
       applyAuto = false;
     } else if (user && user.autoLunchMode === 'Yes') {
       applyAuto = true;
-      deductMins = user.autoLunchMinutes ?? company.autoLunchMinutes;
-      thresholdHours = user.autoLunchAfterHours ?? company.autoLunchAfterHours;
-    } else {
-      // 'Use company setting' or no user override
-      if (company.autoLunchMode === 'Yes') {
-        applyAuto = true;
-      } else if (company.autoLunchMode === 'Per user' && user?.autoLunchMode === 'Yes') {
-        applyAuto = true;
-      }
+      deductMins = user.autoLunchMinutes ?? (company.autoLunchMinutes || 30);
+      thresholdHours = user.autoLunchAfterHours ?? (company.autoLunchAfterHours || 6);
     }
 
     const rawHours = rawDurationMins / 60;
-    if (applyAuto && rawHours >= thresholdHours && deductMins > 0) {
+    if (applyAuto && rawHours > thresholdHours && deductMins > 0) {
       lunchDeductedMins = Math.min(deductMins, rawDurationMins);
     }
   }
@@ -371,22 +365,17 @@ export function evaluateRecordsWithOvertime(
         continue;
       }
 
-      let workedHours = rec.savedWorkedHours;
-      let lunchDeductedMins = rec.savedLunchDeductedMins ?? 0;
-
-      if (workedHours === undefined) {
-        const snap = computeWorkRecordSnapshot(
-          rec.timeIn,
-          rec.timeOut,
-          rec.lunchStart,
-          rec.lunchEnd,
-          rec.workingNow,
-          company,
-          usersById ? usersById[rec.userId] : undefined
-        );
-        workedHours = snap.workedHours;
-        lunchDeductedMins = snap.lunchDeductedMins;
-      }
+      const snap = computeWorkRecordSnapshot(
+        rec.timeIn,
+        rec.timeOut,
+        rec.lunchStart,
+        rec.lunchEnd,
+        rec.workingNow,
+        company,
+        usersById ? usersById[rec.userId] : undefined
+      );
+      const workedHours = snap.workedHours;
+      const lunchDeductedMins = snap.lunchDeductedMins;
 
       const remainingRegular = Math.max(0, 40 - weeklyWorkedAccumulator);
       const regHours = Math.min(workedHours, remainingRegular);

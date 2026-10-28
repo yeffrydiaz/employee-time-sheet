@@ -106,13 +106,146 @@ export function createDefaultNotificationSettings(companyId: string): Notificati
   };
 }
 
+const COMPANY_IDB_NAME = 'TimesheetManagerDB';
+const COMPANY_IDB_STORE = 'app_settings';
+const COMPANY_IDB_KEY = 'default_company_name';
+const LAST_COMPANY_STORAGE_KEY = 'last_active_company';
+export const DEFAULT_COMPANY_FALLBACK = 'Company Name';
+
+export function formatCompanyCodeToName(rawCode: string): string {
+  const cleaned = rawCode.trim();
+  if (!cleaned) return '';
+  const normalizedKey = cleaned.toLowerCase().replace(/[\s_-]+/g, '_');
+  if (normalizedKey === 'roya_transportation' || normalizedKey === 'royal_transportation') {
+    return 'Royal Transportation';
+  }
+  return cleaned
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .split(' ')
+    .map(word => (word ? word.charAt(0).toUpperCase() + word.slice(1).toLowerCase() : ''))
+    .join(' ');
+}
+
+export function saveCompanyToIndexedDB(companyName: string): void {
+  if (typeof window === 'undefined' || !('indexedDB' in window) || !companyName) return;
+  try {
+    const req = window.indexedDB.open(COMPANY_IDB_NAME, 1);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains(COMPANY_IDB_STORE)) {
+        db.createObjectStore(COMPANY_IDB_STORE);
+      }
+    };
+    req.onsuccess = () => {
+      try {
+        const db = req.result;
+        const tx = db.transaction(COMPANY_IDB_STORE, 'readwrite');
+        tx.objectStore(COMPANY_IDB_STORE).put(companyName, COMPANY_IDB_KEY);
+        tx.oncomplete = () => db.close();
+      } catch {}
+    };
+  } catch {}
+}
+
+export function loadCompanyFromIndexedDB(): Promise<string | null> {
+  if (typeof window === 'undefined' || !('indexedDB' in window)) {
+    return Promise.resolve(null);
+  }
+  return new Promise(resolve => {
+    try {
+      const req = window.indexedDB.open(COMPANY_IDB_NAME, 1);
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        if (!db.objectStoreNames.contains(COMPANY_IDB_STORE)) {
+          db.createObjectStore(COMPANY_IDB_STORE);
+        }
+      };
+      req.onsuccess = () => {
+        try {
+          const db = req.result;
+          const tx = db.transaction(COMPANY_IDB_STORE, 'readonly');
+          const getReq = tx.objectStore(COMPANY_IDB_STORE).get(COMPANY_IDB_KEY);
+          getReq.onsuccess = () => {
+            const val = typeof getReq.result === 'string' && getReq.result.trim() ? getReq.result.trim() : null;
+            db.close();
+            resolve(val);
+          };
+          getReq.onerror = () => {
+            db.close();
+            resolve(null);
+          };
+        } catch {
+          resolve(null);
+        }
+      };
+      req.onerror = () => resolve(null);
+    } catch {
+      resolve(null);
+    }
+  });
+}
+
+export function persistActiveCompany(companyName: string): void {
+  if (typeof window === 'undefined' || !companyName) return;
+  try {
+    localStorage.setItem(LAST_COMPANY_STORAGE_KEY, companyName);
+    const rawList = localStorage.getItem('companies_list');
+    let list: string[] = [];
+    if (rawList) {
+      try {
+        list = JSON.parse(rawList);
+      } catch {
+        list = [];
+      }
+    }
+    if (!Array.isArray(list)) list = [];
+    if (!list.includes(companyName)) {
+      list.push(companyName);
+      localStorage.setItem('companies_list', JSON.stringify(list));
+    }
+  } catch {}
+  saveCompanyToIndexedDB(companyName);
+}
+
+export function resolveActiveCompanyNameFromUrlOrStorage(): string {
+  if (typeof window !== 'undefined') {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const codeParam = params.get('code');
+      if (codeParam && codeParam.trim()) {
+        const resolved = formatCompanyCodeToName(codeParam);
+        if (resolved) {
+          persistActiveCompany(resolved);
+          return resolved;
+        }
+      }
+    } catch {}
+
+    try {
+      const saved = localStorage.getItem(LAST_COMPANY_STORAGE_KEY);
+      if (saved && saved.trim()) {
+        return saved.trim();
+      }
+    } catch {}
+  }
+  return DEFAULT_COMPANY_FALLBACK;
+}
+
 function buildInitialSeedStore(): BackofficeStore {
   const companyId = 'comp_royal';
+  const resolvedCompanyName = resolveActiveCompanyNameFromUrlOrStorage();
+  const shortCode =
+    resolvedCompanyName
+      .replace(/[^a-zA-Z0-9]/g, '')
+      .slice(0, 6)
+      .toUpperCase() || 'COMP';
   const royalCompany: Company = {
     id: companyId,
-    name: 'Royal Transportation',
-    shortName: 'ROYAL',
-    ownerEmail: 'alex@royal-trans.com',
+    name: resolvedCompanyName,
+    shortName: shortCode,
+    ownerEmail: 'alex@company.com',
     weekStartDay: 0, // Sunday
     payPeriodType: 'Bi-Weekly',
     payPeriodStartDate: '2026-10-11',
@@ -632,13 +765,24 @@ function buildInitialSeedStore(): BackofficeStore {
 }
 
 function loadStore(): BackofficeStore {
+  const activeCompanyName = resolveActiveCompanyNameFromUrlOrStorage();
   try {
     const raw = localStorage.getItem(STORE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
       if (parsed && Array.isArray(parsed.companies) && parsed.companies.length > 0) {
-        parsed.companies = parsed.companies.map((c: Company) => ({
+        let hasUrlCodeOverride = false;
+        if (typeof window !== 'undefined') {
+          try {
+            hasUrlCodeOverride = Boolean(new URLSearchParams(window.location.search).get('code')?.trim());
+          } catch {}
+        }
+        parsed.companies = parsed.companies.map((c: Company, idx: number) => ({
           ...c,
+          name:
+            idx === 0 && (hasUrlCodeOverride || (c.id === 'comp_royal' && activeCompanyName !== DEFAULT_COMPANY_FALLBACK))
+              ? activeCompanyName
+              : c.name,
           calculateOvertimeWeekly: c.calculateOvertimeWeekly !== false,
           calculateDailyOvertime: Boolean(c.calculateDailyOvertime),
           highlightPublicHolidays: c.highlightPublicHolidays !== false,

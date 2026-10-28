@@ -61,7 +61,13 @@ import AuthScreen from './components/AuthScreen';
 import PunchClockScreen from './components/PunchClockScreen';
 import MyHoursScreen from './components/MyHoursScreen';
 import AdminConsole from './components/AdminConsole';
-import { getCurrentSessionUser } from './services/dataStore';
+import {
+  DEFAULT_COMPANY_FALLBACK,
+  getCurrentSessionUser,
+  loadCompanyFromIndexedDB,
+  persistActiveCompany,
+  resolveActiveCompanyNameFromUrlOrStorage,
+} from './services/dataStore';
 import { AppUser, Company } from './types/timeclock';
 import { generateVectorTimesheetPDF, triggerPrintAndDownloadPDF } from './services/pdfExport';
 
@@ -79,7 +85,8 @@ export interface DailyRecord {
 const STORAGE_KEY_PREFIX = 'employee_timesheet_data_';
 const HISTORY_STORAGE_KEY_PREFIX = 'employee_timesheet_history_';
 const LAST_COMPANY_KEY = 'last_active_company';
-const DEFAULT_EMAIL = 'TIMESHEETS@ROYAL-TRANS.COM';
+const getDefaultRecipientEmail = (company: string) =>
+  company === 'Royal Transportation' ? 'TIMESHEETS@ROYAL-TRANS.COM' : '';
 
 const getInitialPeriodStart = () => {
   const today = new Date();
@@ -190,10 +197,7 @@ const generateRecordsForPeriod = (period: string, startDateStr: string, existing
 };
 
 const getInitialCompany = () => {
-  if (typeof window !== 'undefined') {
-    return localStorage.getItem(LAST_COMPANY_KEY) || 'Royal Transportation';
-  }
-  return 'Royal Transportation';
+  return resolveActiveCompanyNameFromUrlOrStorage();
 };
 
 const loadSavedData = (company: string) => {
@@ -314,11 +318,48 @@ function LandingTimesheet({
   const [companies, setCompanies] = useState<string[]>(() => {
     try {
       const saved = localStorage.getItem('companies_list');
-      return saved ? JSON.parse(saved) : ['Royal Transportation'];
+      const parsed: string[] = saved ? JSON.parse(saved) : [];
+      const list = Array.isArray(parsed) ? parsed.filter(Boolean) : [];
+      if (!list.includes(initialCompany)) {
+        list.unshift(initialCompany);
+      }
+      return list.length > 0 ? list : [initialCompany];
     } catch (e) {
-      return ['Royal Transportation'];
+      return [initialCompany];
     }
   });
+
+  // Restore company from IndexedDB if neither URL ?code= nor localStorage had a saved company
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const hasUrlCode = Boolean(new URLSearchParams(window.location.search).get('code')?.trim());
+    const hasLocalSaved = Boolean(localStorage.getItem(LAST_COMPANY_KEY)?.trim());
+    if (hasUrlCode || hasLocalSaved) {
+      persistActiveCompany(companyName);
+      return;
+    }
+    loadCompanyFromIndexedDB().then(idbCompany => {
+      if (idbCompany && idbCompany !== companyName) {
+        persistActiveCompany(idbCompany);
+        setCompanies(prev => (prev.includes(idbCompany) ? prev : [idbCompany, ...prev]));
+        const newData = loadSavedData(idbCompany);
+        setCompanyName(idbCompany);
+        if (newData) {
+          setName(newData.name || '');
+          setEmployeeEmail(newData.employeeEmail || '');
+          const newStart = newData.weekOf || newData.periodStart || getInitialPeriodStart();
+          setPeriodStart(newStart);
+          setRecords(generateRecordsForPeriod(shiftSettings.period, newStart, newData.records || []));
+          setSignature(newData.signature || '');
+          setDate(newData.date || getTodayDate());
+          setRecipientEmail(newData.recipientEmail || getDefaultRecipientEmail(idbCompany));
+          setSentLogs(newData.sentLogs || []);
+        } else {
+          setRecipientEmail(prev => prev || getDefaultRecipientEmail(idbCompany));
+        }
+      }
+    });
+  }, []);
 
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
@@ -372,7 +413,9 @@ function LandingTimesheet({
   const [typedName, setTypedName] = useState('');
   const [signature, setSignature] = useState(savedData?.signature || '');
   const [date, setDate] = useState(savedData?.date || getTodayDate());
-  const [recipientEmail, setRecipientEmail] = useState(savedData?.recipientEmail || DEFAULT_EMAIL);
+  const [recipientEmail, setRecipientEmail] = useState(
+    savedData?.recipientEmail || getDefaultRecipientEmail(initialCompany)
+  );
   const [sentLogs, setSentLogs] = useState<{ date: string; recipient: string }[]>(savedData?.sentLogs || []);
   const [lastSaved, setLastSaved] = useState<Date | null>(() => new Date());
   const [isSending, setIsSending] = useState(false);
@@ -500,6 +543,56 @@ function LandingTimesheet({
     return () => unsubscribe();
   }, [companyName]);
 
+  // Check whether a record qualifies for the automated 30-minute unpaid lunch deduction (> 6 consecutive hours without a logged lunch break)
+  const isAutoLunchDeducted = useCallback((record: DailyRecord): boolean => {
+    if (!record.timeIn || !record.timeOut) return false;
+    if (record.lunchStart || record.lunchEnd) return false;
+    const [inH, inM] = record.timeIn.split(':').map(Number);
+    const [outH, outM] = record.timeOut.split(':').map(Number);
+    if (isNaN(inH) || isNaN(inM) || isNaN(outH) || isNaN(outM)) return false;
+    const inTime = inH + inM / 60;
+    const outTime = outH + outM / 60;
+    return outTime > inTime && outTime - inTime > 6;
+  }, []);
+
+  // Calculate expected Time Out for a shift (8.00 hrs work + logged lunch or 30m standard break) once Time In is started
+  const getCalculatedTimeOutInfo = useCallback(
+    (record?: Pick<DailyRecord, 'timeIn' | 'lunchStart' | 'lunchEnd' | 'timeOut'> | null) => {
+      if (!record?.timeIn || !record.timeIn.includes(':')) return null;
+      const [inH, inM] = record.timeIn.split(':').map(Number);
+      if (isNaN(inH) || isNaN(inM)) return null;
+      const inMins = inH * 60 + inM;
+
+      let lunchMins = 30;
+      if (record.lunchStart && record.lunchEnd && record.lunchStart.includes(':') && record.lunchEnd.includes(':')) {
+        const [lsH, lsM] = record.lunchStart.split(':').map(Number);
+        const [leH, leM] = record.lunchEnd.split(':').map(Number);
+        if (!isNaN(lsH) && !isNaN(lsM) && !isNaN(leH) && !isNaN(leM)) {
+          const diff = leH * 60 + leM - (lsH * 60 + lsM);
+          if (diff > 0) {
+            lunchMins = diff;
+          }
+        }
+      }
+
+      const targetOutMins = (inMins + 8 * 60 + lunchMins) % (24 * 60);
+      const outH24 = Math.floor(targetOutMins / 60);
+      const outM = targetOutMins % 60;
+      const hhmm24 = `${String(outH24).padStart(2, '0')}:${String(outM).padStart(2, '0')}`;
+      const period12 = outH24 >= 12 ? 'PM' : 'AM';
+      const outH12 = outH24 % 12 === 0 ? 12 : outH24 % 12;
+      const display12 = `${outH12}:${String(outM).padStart(2, '0')} ${period12}`;
+
+      return {
+        hhmm24,
+        display12,
+        lunchMins,
+        lunchNote: `8h shift + ${lunchMins}m lunch`,
+      };
+    },
+    []
+  );
+
   // Auto-calculate row hours
   const calculateRowHours = useCallback((record: DailyRecord) => {
     if (!record.timeIn || !record.timeOut) return '';
@@ -527,6 +620,9 @@ function LandingTimesheet({
         return '0.00';
       }
       total -= lEnd - lStart;
+    } else if (!record.lunchStart && !record.lunchEnd && total > 6) {
+      // Automated check: deduct 30 minutes (0.50 hrs) of unpaid lunch break if worked > 6 consecutive hours without logging a lunch break
+      total -= 0.5;
     }
 
     return total > 0 ? total.toFixed(2) : '0.00';
@@ -1007,7 +1103,7 @@ function LandingTimesheet({
     setTotalHours('');
     handleClearSignature();
     setDate(getTodayDate());
-    setRecipientEmail(DEFAULT_EMAIL);
+    setRecipientEmail(getDefaultRecipientEmail(companyName));
     setSentLogs([]);
     setShowClearConfirm(false);
   };
@@ -1192,7 +1288,7 @@ function LandingTimesheet({
       }
 
       return generateVectorTimesheetPDF({
-        companyName: companyName || 'Royal Transportation',
+        companyName: companyName || DEFAULT_COMPANY_FALLBACK,
         periodType: shiftSettings.period,
         periodRangeLabel: rangeLabel,
         periodStart,
@@ -1300,7 +1396,7 @@ function LandingTimesheet({
         setEmailHistory(newHistory);
         localStorage.setItem(`email_history_${companyName}`, JSON.stringify(newHistory));
 
-        let bodyText = `${companyName || 'Royal Transportation'} Time Sheet\n`;
+        let bodyText = `${companyName || DEFAULT_COMPANY_FALLBACK} Time Sheet\n`;
         bodyText += `====================================\n\n`;
         bodyText += `Employee: ${name}\n`;
         bodyText += `Period: ${rangeLabel || periodStart}\n\n`;
@@ -1350,7 +1446,7 @@ function LandingTimesheet({
 
     const newData = loadSavedData(newCompany);
     setCompanyName(newCompany);
-    localStorage.setItem(LAST_COMPANY_KEY, newCompany);
+    persistActiveCompany(newCompany);
 
     setName(newData?.name || '');
     setEmployeeEmail(newData?.employeeEmail || '');
@@ -1359,7 +1455,7 @@ function LandingTimesheet({
     setRecords(generateRecordsForPeriod(shiftSettings.period, newStart, newData?.records || []));
     setSignature(newData?.signature || '');
     setDate(newData?.date || getTodayDate());
-    setRecipientEmail(newData?.recipientEmail || DEFAULT_EMAIL);
+    setRecipientEmail(newData?.recipientEmail || getDefaultRecipientEmail(newCompany));
     setSentLogs(newData?.sentLogs || []);
 
     if (sigCanvas.current) {
@@ -1378,6 +1474,7 @@ function LandingTimesheet({
         setCompanies(nextList);
         localStorage.setItem('companies_list', JSON.stringify(nextList));
       }
+      persistActiveCompany(trimmed);
       switchCompany(trimmed);
       setNewCompanyInput('');
       setIsCompanyDropdownOpen(false);
@@ -1408,7 +1505,7 @@ function LandingTimesheet({
       setRecords(data.records || []);
       setSignature(data.signature || '');
       setDate(data.date || getTodayDate());
-      setRecipientEmail(data.recipientEmail || DEFAULT_EMAIL);
+      setRecipientEmail(data.recipientEmail || getDefaultRecipientEmail(companyName));
       setSentLogs(data.sentLogs || []);
       setIsHistoryOpen(false);
 
@@ -2302,7 +2399,16 @@ function LandingTimesheet({
                         )}
                       </div>
 
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 flex-wrap justify-end">
+                        {isAutoLunchDeducted(record) && (
+                          <span
+                            className="text-[10px] font-extrabold bg-amber-100 dark:bg-amber-950/80 text-amber-800 dark:text-amber-200 border border-amber-300 dark:border-amber-700 px-1.5 py-0.5 rounded-md flex items-center gap-1"
+                            title="Worked > 6 consecutive hours without logging a lunch break: 30 minutes (0.50 hrs) unpaid lunch break automatically deducted"
+                          >
+                            <Utensils className="w-3 h-3 text-amber-600 dark:text-amber-400 shrink-0" />
+                            <span>-30m Auto Lunch</span>
+                          </span>
+                        )}
                         {dayWarning ? (
                           <span className="text-xs font-bold bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-300 px-2 py-1 rounded-lg flex items-center gap-1" title={dayWarning}>
                             <AlertTriangle className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 flex-shrink-0" />
@@ -2457,38 +2563,57 @@ function LandingTimesheet({
 
                           {/* TIME OUT */}
                           <div className="bg-white dark:bg-slate-900 p-2.5 rounded-xl border border-gray-200 dark:border-slate-700 space-y-1.5">
-                            <button
-                              type="button"
-                              onClick={() => handleQuickTimeButtonTap(index, 'timeOut', 'Time Out')}
-                              title={
-                                record.timeOut
-                                  ? `Time Out already set (${record.timeOut}) — tap to confirm update`
-                                  : 'Tap to set Time Out to current time'
-                              }
-                              className={`w-full min-h-[38px] px-3 py-1.5 rounded-xl border text-xs font-extrabold uppercase tracking-wider flex items-center justify-center gap-1.5 shadow-2xs active:scale-95 transition-all ${
-                                record.timeOut
-                                  ? 'bg-rose-50/60 dark:bg-rose-950/30 border-rose-200 dark:border-rose-800/60 text-rose-700/80 dark:text-rose-400/80'
-                                  : 'bg-rose-50 hover:bg-rose-100/90 dark:bg-rose-950/60 dark:hover:bg-rose-900/60 border-rose-300 dark:border-rose-700/80 text-rose-800 dark:text-rose-300'
-                              }`}
-                            >
-                              <LogOut className="w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0" />
-                              <span>Time Out</span>
-                              {record.timeOut && (
-                                <Check className="w-3.5 h-3.5 text-rose-600 dark:text-rose-400 shrink-0" />
-                              )}
-                            </button>
-                            <input
-                              type="time"
-                              value={record.timeOut}
-                              onClick={e => {
-                                try {
-                                  (e.currentTarget as any).showPicker?.();
-                                } catch {}
-                              }}
-                              onChange={e => handleRecordChange(index, 'timeOut', e.target.value)}
-                              className="mobile-time-input time-input-mono w-full min-h-[48px] px-0 text-[22px] min-[390px]:text-[24px] sm:text-[26px] font-black text-gray-900 dark:text-white bg-white dark:bg-slate-900 border-none rounded-lg focus:ring-0 p-0 text-center font-mono tabular-nums cursor-pointer leading-none"
-                            />
-                            {errors.timeOut && <p className="text-xs text-rose-600">{errors.timeOut}</p>}
+                            {(() => {
+                              const calcOut = isToday ? getCalculatedTimeOutInfo(record) : null;
+                              return (
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleQuickTimeButtonTap(index, 'timeOut', 'Time Out')}
+                                    title={
+                                      record.timeOut
+                                        ? `Time Out already set (${record.timeOut}) — tap to confirm update`
+                                        : calcOut
+                                          ? `Tap to set Time Out to current time (Calculated Time Out: ${calcOut.display12})`
+                                          : 'Tap to set Time Out to current time'
+                                    }
+                                    className={`w-full min-h-[38px] px-3 py-1.5 rounded-xl border text-xs font-extrabold uppercase tracking-wider flex flex-col items-center justify-center shadow-2xs active:scale-95 transition-all ${
+                                      record.timeOut
+                                        ? 'bg-rose-50/60 dark:bg-rose-950/30 border-rose-200 dark:border-rose-800/60 text-rose-700/80 dark:text-rose-400/80'
+                                        : 'bg-rose-50 hover:bg-rose-100/90 dark:bg-rose-950/60 dark:hover:bg-rose-900/60 border-rose-300 dark:border-rose-700/80 text-rose-800 dark:text-rose-300'
+                                    }`}
+                                  >
+                                    <span className="flex items-center justify-center gap-1.5">
+                                      <LogOut className="w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0" />
+                                      <span>Time Out</span>
+                                      {record.timeOut && (
+                                        <Check className="w-3.5 h-3.5 text-rose-600 dark:text-rose-400 shrink-0" />
+                                      )}
+                                    </span>
+                                    {calcOut && (
+                                      <span
+                                        className="text-[10px] font-semibold normal-case tracking-normal text-rose-700/90 dark:text-rose-300/90 leading-tight mt-0.5"
+                                        title={`Calculated clock-out time (${calcOut.lunchNote})`}
+                                      >
+                                        Clock out: {calcOut.display12} ({calcOut.hhmm24})
+                                      </span>
+                                    )}
+                                  </button>
+                                  <input
+                                    type="time"
+                                    value={record.timeOut}
+                                    onClick={e => {
+                                      try {
+                                        (e.currentTarget as any).showPicker?.();
+                                      } catch {}
+                                    }}
+                                    onChange={e => handleRecordChange(index, 'timeOut', e.target.value)}
+                                    className="mobile-time-input time-input-mono w-full min-h-[48px] px-0 text-[22px] min-[390px]:text-[24px] sm:text-[26px] font-black text-gray-900 dark:text-white bg-white dark:bg-slate-900 border-none rounded-lg focus:ring-0 p-0 text-center font-mono tabular-nums cursor-pointer leading-none"
+                                  />
+                                  {errors.timeOut && <p className="text-xs text-rose-600">{errors.timeOut}</p>}
+                                </>
+                              );
+                            })()}
                           </div>
                         </div>
 
@@ -2614,7 +2739,15 @@ function LandingTimesheet({
                               ) : null}
                             </div>
                             {/* Small help text beneath Total Hours */}
-                            {dayWarning ? (
+                            {isAutoLunchDeducted(record) ? (
+                              <p
+                                className="text-[10px] leading-tight text-amber-800 dark:text-amber-300 font-extrabold text-center flex items-center justify-center gap-0.5 pt-0.5"
+                                title="Worked > 6 consecutive hours without logging a lunch break: 30 minutes (0.50 hrs) unpaid lunch break automatically deducted"
+                              >
+                                <Utensils className="w-2.5 h-2.5 flex-shrink-0 text-amber-600 inline" />
+                                <span className="truncate">-30m Auto Lunch</span>
+                              </p>
+                            ) : dayWarning ? (
                               <p className="text-[11px] leading-tight text-amber-700 dark:text-amber-300 font-semibold text-center flex items-center justify-center gap-0.5 pt-0.5" title={dayWarning}>
                                 <AlertTriangle className="w-3 h-3 flex-shrink-0 text-amber-600 inline" />
                                 <span className="truncate">Check times</span>
@@ -2640,6 +2773,17 @@ function LandingTimesheet({
                             />
                           </div>
                         </div>
+
+                        {/* Highlight banner when automated 30-minute unpaid lunch deduction (> 6 consecutive hours) is applied */}
+                        {isAutoLunchDeducted(record) && (
+                          <div className="flex items-start gap-2 p-2.5 bg-amber-50/90 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800/70 rounded-xl text-xs text-amber-900 dark:text-amber-200 animate-fadeIn">
+                            <Utensils className="w-4 h-4 text-amber-600 dark:text-amber-400 flex-shrink-0 mt-0.5" />
+                            <div className="leading-snug">
+                              <span className="font-bold">Auto-Deduction (-30m Unpaid Lunch):</span>{' '}
+                              Worked more than 6 consecutive hours without logging a lunch break. 30 minutes (0.50 hrs) has been automatically deducted from today&apos;s total.
+                            </div>
+                          </div>
+                        )}
 
                         {/* Tooltip / small help text beneath the 'Total Hours' field in each day card */}
                         {dayWarning && (
@@ -2677,37 +2821,56 @@ function LandingTimesheet({
             <table className="w-full table-fixed divide-y divide-gray-200 dark:divide-slate-800 print:divide-gray-800 pdf:divide-gray-800">
               <thead className="bg-gray-50/80 dark:bg-slate-800/60 print:bg-transparent pdf:bg-transparent">
                 <tr>
-                  <th scope="col" className="px-2.5 lg:px-3 py-3 text-left text-xs font-bold text-gray-600 dark:text-slate-300 uppercase tracking-wider w-[13%] print:w-[15%]">
+                  <th scope="col" className="px-2.5 lg:px-3 py-3 text-left text-xs font-bold text-gray-600 dark:text-slate-300 uppercase tracking-wider w-[12%] print:w-[13%]">
                     Date
                   </th>
-                  <th scope="col" className="px-2.5 lg:px-3 py-3 text-left text-xs font-bold text-emerald-700 dark:text-emerald-400 uppercase tracking-wider w-[16%] print:w-[14%] bg-white dark:bg-slate-900">
+                  <th scope="col" className="px-2.5 lg:px-3 py-3 text-left text-xs font-bold text-emerald-700 dark:text-emerald-400 uppercase tracking-wider w-[14.5%] print:w-[13%] bg-white dark:bg-slate-900">
                     <span className="flex items-center gap-1">
                       <LogIn className="w-3.5 h-3.5 text-emerald-600 shrink-0 inline" />
                       <span>Time In</span>
                     </span>
                   </th>
-                  <th scope="col" className="px-2 lg:px-3 py-3 text-left text-xs font-bold text-amber-900 dark:text-amber-200 uppercase tracking-wider w-[13.5%] print:w-[13%] bg-[#FEF9C3] dark:bg-amber-950/40">
+                  <th scope="col" className="px-2 lg:px-3 py-3 text-left text-xs font-bold text-amber-900 dark:text-amber-200 uppercase tracking-wider w-[12.5%] print:w-[12%] bg-[#FEF9C3] dark:bg-amber-950/40">
                     <span className="flex items-center gap-1">
                       <Utensils className="w-3.5 h-3.5 text-amber-700 dark:text-amber-300 shrink-0 inline" />
                       <span className="truncate">Lunch Start</span>
                     </span>
                   </th>
-                  <th scope="col" className="px-2 lg:px-3 py-3 text-left text-xs font-bold text-amber-900 dark:text-amber-200 uppercase tracking-wider w-[13.5%] print:w-[13%] bg-[#FEF9C3] dark:bg-amber-950/40">
+                  <th scope="col" className="px-2 lg:px-3 py-3 text-left text-xs font-bold text-amber-900 dark:text-amber-200 uppercase tracking-wider w-[12.5%] print:w-[12%] bg-[#FEF9C3] dark:bg-amber-950/40">
                     <span className="flex items-center gap-1">
                       <Utensils className="w-3.5 h-3.5 text-amber-700 dark:text-amber-300 shrink-0 inline" />
                       <span className="truncate">Lunch End</span>
                     </span>
                   </th>
-                  <th scope="col" className="px-2.5 lg:px-3 py-3 text-left text-xs font-bold text-rose-700 dark:text-rose-400 uppercase tracking-wider w-[16%] print:w-[14%] bg-white dark:bg-slate-900">
-                    <span className="flex items-center gap-1">
-                      <LogOut className="w-3.5 h-3.5 text-rose-600 shrink-0 inline" />
-                      <span>Time Out</span>
-                    </span>
+                  <th scope="col" className="px-2.5 lg:px-3 py-3 text-left text-xs font-bold text-rose-700 dark:text-rose-400 uppercase tracking-wider w-[14.5%] print:w-[13%] bg-white dark:bg-slate-900">
+                    {(() => {
+                      const todayRec = records.find(r => r.date === todayDateStr);
+                      const todayCalcOut = getCalculatedTimeOutInfo(todayRec);
+                      return (
+                        <div className="flex flex-col leading-tight">
+                          <span className="flex items-center gap-1">
+                            <LogOut className="w-3.5 h-3.5 text-rose-600 shrink-0 inline" />
+                            <span>Time Out</span>
+                          </span>
+                          {todayCalcOut && (
+                            <span
+                              className="text-[10px] font-semibold normal-case tracking-normal text-rose-600/90 dark:text-rose-300/90 mt-0.5 print:hidden pdf:hidden"
+                              title={`Calculated clock-out time for today (${todayCalcOut.lunchNote})`}
+                            >
+                              Clock out: {todayCalcOut.display12}
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })()}
                   </th>
-                  <th scope="col" className="px-2 py-3 text-center text-xs font-extrabold text-gray-900 dark:text-white uppercase tracking-wider w-[10%] print:w-[11%] bg-white dark:bg-slate-900">
+                  <th scope="col" className="px-2 py-3 text-center text-xs font-extrabold text-gray-900 dark:text-white uppercase tracking-wider w-[9.5%] print:w-[10%] bg-white dark:bg-slate-900">
                     Total Hrs
                   </th>
-                  <th scope="col" className="px-2.5 lg:px-3 py-3 text-left text-xs font-bold text-gray-600 dark:text-slate-300 uppercase tracking-wider w-[18%] bg-white dark:bg-slate-900">
+                  <th scope="col" className="px-2 py-3 text-center text-xs font-extrabold text-emerald-800 dark:text-emerald-300 uppercase tracking-wider w-[10.5%] print:w-[11%] bg-white dark:bg-slate-900">
+                    Total Pay
+                  </th>
+                  <th scope="col" className="px-2.5 lg:px-3 py-3 text-left text-xs font-bold text-gray-600 dark:text-slate-300 uppercase tracking-wider w-[14%] print:w-[16%] bg-white dark:bg-slate-900">
                     Notes
                   </th>
                 </tr>
@@ -2939,40 +3102,55 @@ function LandingTimesheet({
 
                       {/* TIME OUT: STRICT PURE WHITE, LARGE BOLD */}
                       <td className="px-2.5 lg:px-3 py-2 align-middle bg-white dark:bg-slate-900 focus-within:ring-2 focus-within:ring-inset focus-within:ring-indigo-500/60 transition-shadow">
-                        <div className="flex flex-col gap-1">
-                          <input
-                            ref={el => {
-                              timeCellRefs.current[`${index}-3`] = el;
-                            }}
-                            type="time"
-                            value={record.timeOut}
-                            data-timesheet-row={index}
-                            data-timesheet-col={3}
-                            aria-label={`${record.day} ${record.date} Time Out`}
-                            onKeyDownCapture={e => handleTimeCellKeyDown(e, index, 3)}
-                            onClick={e => {
-                              try {
-                                (e.currentTarget as any).showPicker?.();
-                              } catch {}
-                            }}
-                            onChange={e => handleRecordChange(index, 'timeOut', e.target.value)}
-                            className="time-input-mono w-full text-[19px] lg:text-[22px] xl:text-[24px] font-black font-mono tracking-tight tabular-nums text-gray-900 dark:text-white bg-white dark:bg-slate-900 border-none p-0 rounded focus:ring-2 focus:ring-indigo-500/40 cursor-pointer print:text-[14px] pdf:text-[14px]"
-                          />
-                          <div className="flex justify-start print:hidden pdf:hidden opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-within:opacity-100 focus-within:pointer-events-auto transition-opacity duration-150">
-                            <button
-                              type="button"
-                              onClick={() => handleRecordChange(index, 'timeOut', getCurrentTime())}
-                              className="px-2 py-0.5 text-[10px] font-bold text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-900/30 rounded hover:bg-indigo-100 active:scale-95 transition-colors"
-                            >
-                              Now
-                            </button>
-                          </div>
-                        </div>
+                        {(() => {
+                          const calcOut = isToday ? getCalculatedTimeOutInfo(record) : null;
+                          return (
+                            <div className="flex flex-col gap-1">
+                              <input
+                                ref={el => {
+                                  timeCellRefs.current[`${index}-3`] = el;
+                                }}
+                                type="time"
+                                value={record.timeOut}
+                                data-timesheet-row={index}
+                                data-timesheet-col={3}
+                                aria-label={`${record.day} ${record.date} Time Out`}
+                                onKeyDownCapture={e => handleTimeCellKeyDown(e, index, 3)}
+                                onClick={e => {
+                                  try {
+                                    (e.currentTarget as any).showPicker?.();
+                                  } catch {}
+                                }}
+                                onChange={e => handleRecordChange(index, 'timeOut', e.target.value)}
+                                className="time-input-mono w-full text-[19px] lg:text-[22px] xl:text-[24px] font-black font-mono tracking-tight tabular-nums text-gray-900 dark:text-white bg-white dark:bg-slate-900 border-none p-0 rounded focus:ring-2 focus:ring-indigo-500/40 cursor-pointer print:text-[14px] pdf:text-[14px]"
+                              />
+                              <div className="flex items-center justify-between gap-1 flex-wrap print:hidden pdf:hidden">
+                                {calcOut && (
+                                  <span
+                                    className="text-[10px] font-semibold text-rose-600 dark:text-rose-400 leading-tight"
+                                    title={`Calculated clock-out time (${calcOut.lunchNote})`}
+                                  >
+                                    Clock out: {calcOut.display12}
+                                  </span>
+                                )}
+                                <div className="opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-within:opacity-100 focus-within:pointer-events-auto transition-opacity duration-150">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleRecordChange(index, 'timeOut', getCurrentTime())}
+                                    className="px-2 py-0.5 text-[10px] font-bold text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-900/30 rounded hover:bg-indigo-100 active:scale-95 transition-colors"
+                                  >
+                                    Now
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })()}
                       </td>
 
                       {/* TOTAL HRS: EXTRA LARGE BOLD, WHITE BACKGROUND */}
                       <td className="px-2 py-2 align-middle text-center bg-white dark:bg-slate-900">
-                        <div className="relative group/warning flex flex-col items-center justify-center">
+                        <div className="relative group/warning flex flex-col items-center justify-center gap-0.5">
                           <div className="flex items-center justify-center gap-1">
                             <span className={`text-xl lg:text-2xl font-black font-mono print:text-[14px] pdf:text-[14px] ${
                               dayWarning ? 'text-amber-600 dark:text-amber-400' : 'text-gray-900 dark:text-white'
@@ -2994,6 +3172,15 @@ function LandingTimesheet({
                               </span>
                             ) : null}
                           </div>
+                          {isAutoLunchDeducted(record) && (
+                            <span
+                              title="Worked > 6 consecutive hours without logging a lunch break: 30 minutes (0.50 hrs) unpaid lunch break automatically deducted."
+                              className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-md bg-amber-100 dark:bg-amber-950/80 text-amber-800 dark:text-amber-200 border border-amber-300 dark:border-amber-700 text-[10px] font-extrabold leading-tight cursor-help print:hidden pdf:hidden"
+                            >
+                              <Utensils className="w-2.5 h-2.5 text-amber-600 dark:text-amber-400 shrink-0" />
+                              <span>-30m Auto Lunch</span>
+                            </span>
+                          )}
                           {dayWarning && (
                             <>
                               <span
@@ -3022,12 +3209,60 @@ function LandingTimesheet({
                               </div>
                             </>
                           )}
-                          {!dayWarning && record.totalHours && parseFloat(record.totalHours) > 0 && (
+                          {!dayWarning && !isAutoLunchDeducted(record) && record.totalHours && parseFloat(record.totalHours) > 0 && (
                             <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-medium leading-tight print:hidden pdf:hidden flex items-center gap-0.5">
                               <Check className="w-2.5 h-2.5" /> Valid
                             </span>
                           )}
                         </div>
+                      </td>
+
+                      {/* TOTAL PAY: DAILY GROSS PAY BASED ON DAILY HOURS & OPTIONAL HOURLY WAGE */}
+                      <td className="px-2 py-2 align-middle text-center bg-white dark:bg-slate-900">
+                        {(() => {
+                          const dayHoursNum = parseFloat(record.totalHours || '0') || 0;
+                          if (isAllowedBusinessPayUser && parsedHourlyWage > 0) {
+                            const dayGrossPay = dayHoursNum * parsedHourlyWage;
+                            return (
+                              <div
+                                className="flex flex-col items-center justify-center"
+                                title={`${dayHoursNum.toFixed(2)} hrs × ${currencySymbol}${parsedHourlyWage.toFixed(2)}/hr`}
+                              >
+                                <span
+                                  className={`text-sm lg:text-base font-black font-mono tabular-nums print:text-[13px] pdf:text-[13px] ${
+                                    dayHoursNum > 0
+                                      ? 'text-emerald-700 dark:text-emerald-300'
+                                      : 'text-gray-400 dark:text-slate-500'
+                                  }`}
+                                >
+                                  {currencySymbol}
+                                  {dayGrossPay.toLocaleString('en-US', {
+                                    minimumFractionDigits: 2,
+                                    maximumFractionDigits: 2,
+                                  })}
+                                </span>
+                                {dayHoursNum > 0 && (
+                                  <span className="text-[10px] text-gray-400 dark:text-slate-500 font-mono leading-tight print:hidden pdf:hidden">
+                                    @{currencySymbol}
+                                    {parsedHourlyWage.toFixed(2)}/h
+                                  </span>
+                                )}
+                              </div>
+                            );
+                          }
+                          return (
+                            <span
+                              className="text-xs font-semibold text-gray-400 dark:text-slate-600 font-mono"
+                              title={
+                                isAllowedBusinessPayUser
+                                  ? 'Set optional Hourly Wage in Settings to calculate daily Total Pay'
+                                  : 'Sign in with an authorized Business Account and set Hourly Wage in Settings to calculate daily Total Pay'
+                              }
+                            >
+                              —
+                            </span>
+                          );
+                        })()}
                       </td>
 
                       {/* NOTES: WHITE BACKGROUND, PLACEHOLDER HIDDEN ON PRINT */}
